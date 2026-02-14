@@ -1,6 +1,5 @@
 import React from 'react';
-import { Merchant, Post, ServiceItem } from '../types';
-import { MOCK_MERCHANTS, MOCK_SERVICES } from '../constants';
+import { Merchant, Post, ServiceItem, SysCategory } from '../types';
 import PostCard from '../components/PostCard';
 
 interface MerchantShopProps {
@@ -8,20 +7,45 @@ interface MerchantShopProps {
     posts: Post[];
     onBack: () => void;
     onPostClick: (post: Post) => void;
+    categoryConfig?: Record<string, SysCategory>;
+    merchantsData?: Record<string, Merchant>; // New Prop
+    servicesData?: ServiceItem[]; // New Prop
 }
 
-const MerchantShop: React.FC<MerchantShopProps> = ({ merchantId, posts, onBack, onPostClick }) => {
-    const merchant = MOCK_MERCHANTS[merchantId];
-    const merchantServices = MOCK_SERVICES.filter(s => s.merchantId === merchantId);
+const MerchantShop: React.FC<MerchantShopProps> = ({ 
+    merchantId, 
+    posts, 
+    onBack, 
+    onPostClick, 
+    categoryConfig,
+    merchantsData,
+    servicesData 
+}) => {
+    // Fallback to empty if data not ready
+    const merchant = merchantsData ? merchantsData[merchantId] : null;
+    const allServices = servicesData || [];
+    
+    const merchantServices = allServices.filter(s => s.merchantId === merchantId);
     const merchantPosts = posts.filter(p => p.merchantId === merchantId);
     
-    if (!merchant) return <div>未找到商户</div>;
+    if (!merchant) {
+        return (
+            <div className="bg-gray-50 min-h-screen flex items-center justify-center flex-col">
+                <p className="text-gray-400 mb-4">未找到商户信息</p>
+                <button onClick={onBack} className="text-blue-500">返回</button>
+            </div>
+        );
+    }
 
     return (
         <div className="bg-gray-50 min-h-screen pb-20">
              {/* Header Image */}
              <div className="h-40 w-full relative bg-gray-800">
-                <img src={merchant.bannerUrl} className="w-full h-full object-cover opacity-70" alt="banner" />
+                {merchant.bannerUrl ? (
+                    <img src={merchant.bannerUrl} className="w-full h-full object-cover opacity-70" alt="banner" />
+                ) : (
+                    <div className="w-full h-full bg-gradient-to-r from-gray-700 to-gray-900 opacity-70"></div>
+                )}
                 <button 
                     onClick={onBack}
                     className="absolute top-4 left-4 w-8 h-8 rounded-full bg-black/30 backdrop-blur text-white flex items-center justify-center z-10"
@@ -95,6 +119,7 @@ const MerchantShop: React.FC<MerchantShopProps> = ({ merchantId, posts, onBack, 
                         post={post} 
                         onClick={onPostClick}
                         onMerchantClick={() => {}} // No-op since we are already here
+                        categoryConfig={categoryConfig}
                     />
                 ))}
                 {merchantPosts.length === 0 && (

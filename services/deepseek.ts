@@ -7,7 +7,7 @@ import { ADMIN_CONTACT } from '../constants';
 
 // Default Configuration
 const DEFAULT_CONFIG = {
-    apiKey: 'sk-5a63e962cc814b3b845ff85234881a6e',
+    apiKey: '', // Security: Removed hardcoded key. User must set this in Admin Dashboard.
     model: 'deepseek-chat',
     temperature: 0.7,
     maxTokens: 2000
@@ -32,6 +32,10 @@ export const getLLMConfig = () => {
 
 export const callDeepSeek = async (messages: DeepSeekMessage[], systemPrompt?: string): Promise<string> => {
     const config = getLLMConfig();
+
+    if (!config.apiKey) {
+        return '请先在【管理员控制台 -> 系统设置】中配置 DeepSeek API Key。';
+    }
 
     try {
         const payloadMessages = systemPrompt 
@@ -62,7 +66,7 @@ export const callDeepSeek = async (messages: DeepSeekMessage[], systemPrompt?: s
         return data.choices?.[0]?.message?.content || '抱歉，我现在无法回答。';
     } catch (error) {
         console.error('DeepSeek API Call Failed:', error);
-        return '网络连接异常或服务暂不可用，请检查后台 API Key 配置。';
+        return 'AI 服务暂时不可用，请检查网络或 API Key 配置。';
     }
 };
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ViewState, Post, User, ChatMessage, BannerAd, ChatSession } from './types';
-import { MOCK_MERCHANTS, MOCK_POSTS } from './constants';
+import { ViewState, Post, User, ChatMessage, BannerAd, ChatSession, SysCategory, Merchant, ServiceItem } from './types';
+import { MOCK_POSTS, CATEGORY_CONFIG, MOCK_BANNERS, MOCK_MERCHANTS, MOCK_SERVICES } from './constants';
 import NavBar from './components/NavBar';
 import Home from './pages/Home';
 import PostDetail from './pages/PostDetail';
@@ -27,6 +27,12 @@ const App: React.FC = () => {
     // Global Data State
     const [currentCity, setCurrentCity] = useState('北京');
     const [posts, setPosts] = useState<Post[]>(MOCK_POSTS);
+    
+    // Dynamic System Config
+    const [categories, setCategories] = useState<Record<string, SysCategory>>(CATEGORY_CONFIG as any);
+    const [banners, setBanners] = useState<BannerAd[]>(MOCK_BANNERS);
+    const [merchants, setMerchants] = useState<Record<string, Merchant>>(MOCK_MERCHANTS);
+    const [services, setServices] = useState<ServiceItem[]>(MOCK_SERVICES);
     
     // System Config State (Announcement)
     const [announcement, setAnnouncement] = useState('🔥 暑期大促开启！租房免中介费，家政服务8折起！千万补贴等你来拿！');
@@ -62,8 +68,6 @@ const App: React.FC = () => {
                 async (position) => {
                     const { latitude, longitude } = position.coords;
                     try {
-                        // Use OpenStreetMap Nominatim for free reverse geocoding
-                        // Note: High volume usage requires an API Key or dedicated server, but fine for demo.
                         const res = await fetch(
                             `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=10&accept-language=zh-CN`
                         );
@@ -71,14 +75,10 @@ const App: React.FC = () => {
                             const data = await res.json();
                             const addr = data.address;
                             if (addr) {
-                                // Priority: City -> Municipality (Beijing/Shanghai etc) -> Town -> County
                                 let detectedCity = addr.city || addr.municipality || addr.town || addr.county;
-                                
                                 if (detectedCity) {
-                                    // Remove '市' suffix for cleaner display (e.g. "北京市" -> "北京")
                                     detectedCity = detectedCity.replace(/市$/, '');
                                     setCurrentCity(detectedCity);
-                                    // Optional: Show a toast? setShowNotification({msg: `已定位到: ${detectedCity}`, type: 'info'});
                                 }
                             }
                         }
@@ -88,9 +88,8 @@ const App: React.FC = () => {
                 },
                 (error) => {
                     console.debug('Location permission denied or timeout:', error.message);
-                    // Fallback remains '北京'
                 },
-                { timeout: 5000, maximumAge: 600000 } // Wait max 5s, use cached loc if < 10min old
+                { timeout: 5000, maximumAge: 600000 }
             );
         }
     }, []);
@@ -98,10 +97,20 @@ const App: React.FC = () => {
     // Initial Data Fetch
     useEffect(() => {
         const loadData = async () => {
-            // 1. Load Posts
-            // Use local mocks first, then fetch updates
-            // (setPosts(MOCK_POSTS) is already done in initial state)
+            // 1. Fetch System Configuration
+            const [fetchedCats, fetchedBanners, fetchedMerchants, fetchedServices] = await Promise.all([
+                api.getSystemCategories(),
+                api.getSystemBanners(),
+                api.getAllMerchants(),
+                api.getAllServices()
+            ]);
             
+            setCategories(fetchedCats);
+            setBanners(fetchedBanners);
+            setMerchants(fetchedMerchants);
+            setServices(fetchedServices);
+
+            // 2. Load Posts
             try {
                 const loadedPosts = await api.getPosts();
                 if (loadedPosts && loadedPosts.length > 0) {
@@ -111,7 +120,7 @@ const App: React.FC = () => {
                 console.warn("Failed to refresh posts, keeping mocks");
             }
 
-            // 2. Load Messages (Simple sync for now)
+            // 3. Load Messages
             const allMessages = await api.getMessages();
             const groupedChats: Record<string, ChatMessage[]> = {};
             
@@ -177,6 +186,47 @@ const App: React.FC = () => {
         // Persist to Supabase
         api.createPost(newPost);
         showToast('发布成功！', 'info');
+    };
+
+    // --- Admin Post Handlers ---
+    const handleDeletePost = async (postId: string) => {
+        if (window.confirm("确定要删除这条发布吗？此操作不可恢复。")) {
+            setPosts(prev => prev.filter(p => p.id !== postId));
+            await api.deletePost(postId);
+            showToast('帖子已删除');
+        }
+    };
+
+    const handleEditPost = async (updatedPost: Post) => {
+        setPosts(prev => prev.map(p => p.id === updatedPost.id ? updatedPost : p));
+        await api.updatePost(updatedPost);
+        showToast('帖子已更新');
+    };
+
+    // --- Admin Category Handlers ---
+    const handleUpdateCategory = async (cat: SysCategory) => {
+        // 1. Optimistic Update Local State
+        setCategories(prev => ({
+            ...prev,
+            [cat.key]: cat
+        }));
+        
+        // 2. Persist to DB
+        await api.upsertCategory(cat);
+        showToast('分类已更新', 'info');
+    };
+
+    const handleDeleteCategory = async (key: string) => {
+         if (window.confirm(`确定要删除分类 "${categories[key]?.label}" 吗？此操作不可恢复。`)) {
+            // 1. Optimistic Update Local State
+            const newCats = { ...categories };
+            delete newCats[key];
+            setCategories(newCats);
+
+            // 2. Persist to DB
+            await api.deleteCategory(key);
+            showToast('分类已删除', 'info');
+         }
     };
 
     const handleCitySelect = (city: string) => {
@@ -256,7 +306,7 @@ const App: React.FC = () => {
             if (lastMsg && lastMsg.role === 'user') {
                 try {
                     const contextHistory = userHistory.slice(-10);
-                    const aiReply = await generateSupportReply(contextHistory, posts, MOCK_MERCHANTS);
+                    const aiReply = await generateSupportReply(contextHistory, posts, merchants);
                     
                     const replyMsg: ChatMessage = {
                         id: Date.now().toString(),
@@ -329,6 +379,60 @@ const App: React.FC = () => {
         showToast('回复已发送');
     };
 
+    // Calculate Chat Sessions for Messages Page
+    const getChatSessions = (): ChatSession[] => {
+        const sessions: ChatSession[] = [];
+        
+        // 1. Add Support Chat (if exists)
+        if (user && supportChats[user.id]) {
+            const history = supportChats[user.id];
+            const lastMsg = history[history.length - 1];
+            sessions.push({
+                id: 'support_chat',
+                targetName: '人工客服',
+                avatarUrl: 'https://ui-avatars.com/api/?name=Admin&background=0D8ABC&color=fff',
+                lastMessage: lastMsg.content,
+                lastTime: lastMsg.timestamp,
+                unreadCount: history.filter(m => m.role === 'admin' && m.timestamp > Date.now() - 3600000).length // Fake unread
+            });
+        }
+
+        // 2. Add Direct Chats (Mocked/Local)
+        // In a real app, you would iterate directChats and format them
+        // For demo, we add static ones if they exist in state
+        Object.keys(directChats).forEach(chatId => {
+            const history = directChats[chatId];
+            const lastMsg = history[history.length - 1];
+            // Try to find target name from Merchants mock or fallback
+            const targetMerchant = merchants[chatId] || MOCK_MERCHANTS[chatId]; 
+            const targetName = targetMerchant ? targetMerchant.name : 'Unknown User';
+            const avatar = targetMerchant ? targetMerchant.logoUrl : 'https://ui-avatars.com/api/?name=User&background=random';
+
+            sessions.push({
+                id: chatId,
+                targetName: targetName,
+                avatarUrl: avatar,
+                lastMessage: lastMsg.content,
+                lastTime: lastMsg.timestamp,
+                unreadCount: 0
+            });
+        });
+
+        // 3. Add default mocks if empty (for demo experience)
+        if (sessions.length === 0) {
+             sessions.push({
+                id: 'demo_c1',
+                targetName: '安居置业',
+                avatarUrl: 'https://picsum.photos/100/100?random=12',
+                lastMessage: '您好，这套房子还在吗？什么时候方便看房？',
+                lastTime: Date.now() - 1000 * 60 * 5,
+                unreadCount: 2
+            });
+        }
+
+        return sessions.sort((a,b) => b.lastTime - a.lastTime);
+    };
+
     const renderContent = () => {
         switch (currentView) {
             case 'HOME':
@@ -342,6 +446,9 @@ const App: React.FC = () => {
                         onBannerClick={handleBannerClick}
                         onCityClick={() => setCurrentView('CITY_SELECT')}
                         onConsultClick={() => setCurrentView('SUPPORT_CHAT')}
+                        // Pass Dynamic Configs
+                        categories={categories}
+                        banners={banners}
                     />
                 );
             case 'EXPLORE':
@@ -351,6 +458,7 @@ const App: React.FC = () => {
                     <Messages 
                         onOpenAI={() => setCurrentView('AI_CHAT')} 
                         onChatClick={handleChatClick}
+                        sessions={getChatSessions()}
                     />
                 );
             case 'PROFILE':
@@ -371,7 +479,11 @@ const App: React.FC = () => {
                     />
                 ) : <Profile user={user} onNavigateToLogin={() => setCurrentView('LOGIN')} onLogout={handleLogout} onNavigate={setCurrentView} />;
             case 'PUBLISH':
-                return <Publish onBack={() => setCurrentView('HOME')} onPublish={handlePublish} />;
+                return <Publish 
+                    onBack={() => setCurrentView('HOME')} 
+                    onPublish={handlePublish}
+                    categoryConfig={categories}
+                />;
             case 'POST_DETAIL':
                 return selectedPost ? (
                     <PostDetail 
@@ -379,8 +491,10 @@ const App: React.FC = () => {
                         onBack={() => setCurrentView('HOME')} 
                         onMerchantClick={handleMerchantClick}
                         onShowToast={(msg) => showToast(msg, 'info')}
+                        // Pass Config to allow looking up category label
+                        categoryConfig={categories}
                     />
-                ) : <Home currentCity={currentCity} posts={posts} announcement={announcement} onPostClick={handlePostClick} onMerchantClick={handleMerchantClick} onBannerClick={handleBannerClick} onCityClick={() => setCurrentView('CITY_SELECT')} onConsultClick={() => setCurrentView('SUPPORT_CHAT')} />;
+                ) : <Home currentCity={currentCity} posts={posts} announcement={announcement} onPostClick={handlePostClick} onMerchantClick={handleMerchantClick} onBannerClick={handleBannerClick} onCityClick={() => setCurrentView('CITY_SELECT')} onConsultClick={() => setCurrentView('SUPPORT_CHAT')} categories={categories} banners={banners} />;
             case 'MERCHANT_DETAIL':
                 return selectedMerchantId ? (
                     <MerchantShop 
@@ -388,8 +502,11 @@ const App: React.FC = () => {
                         posts={posts}
                         onBack={() => setCurrentView('HOME')}
                         onPostClick={handlePostClick}
+                        categoryConfig={categories}
+                        merchantsData={merchants}
+                        servicesData={services}
                     />
-                ) : <Home currentCity={currentCity} posts={posts} announcement={announcement} onPostClick={handlePostClick} onMerchantClick={handleMerchantClick} onBannerClick={handleBannerClick} onCityClick={() => setCurrentView('CITY_SELECT')} onConsultClick={() => setCurrentView('SUPPORT_CHAT')} />;
+                ) : <Home currentCity={currentCity} posts={posts} announcement={announcement} onPostClick={handlePostClick} onMerchantClick={handleMerchantClick} onBannerClick={handleBannerClick} onCityClick={() => setCurrentView('CITY_SELECT')} onConsultClick={() => setCurrentView('SUPPORT_CHAT')} categories={categories} banners={banners} />;
             case 'CITY_SELECT':
                 return (
                     <CitySelect 
@@ -429,15 +546,15 @@ const App: React.FC = () => {
                     <SupportChat 
                         user={user}
                         targetName={selectedChat.targetName}
-                        chatHistory={directChats[selectedChat.id] || []}
-                        onSendMessage={handleUserSendDirectMessage}
+                        chatHistory={selectedChat.id === 'support_chat' && user ? (supportChats[user.id] || []) : (directChats[selectedChat.id] || [])}
+                        onSendMessage={selectedChat.id === 'support_chat' ? handleUserSendSupportMessage : handleUserSendDirectMessage}
                         onBack={() => setCurrentView('MESSAGES')}
                         onLoginReq={() => {
                             showToast('请先登录', 'info');
                             setCurrentView('LOGIN');
                         }}
                     />
-                ) : <Messages onOpenAI={() => setCurrentView('AI_CHAT')} onChatClick={handleChatClick} />;
+                ) : <Messages onOpenAI={() => setCurrentView('AI_CHAT')} onChatClick={handleChatClick} sessions={getChatSessions()} />;
                 
             case 'ADMIN_DASHBOARD':
                 return user?.isAdmin ? (
@@ -448,8 +565,16 @@ const App: React.FC = () => {
                         announcement={announcement}
                         onUpdateAnnouncement={setAnnouncement}
                         onShowToast={showToast}
+                        // Pass Post Management Props
+                        posts={posts}
+                        onDeletePost={handleDeletePost}
+                        onEditPost={handleEditPost}
+                        // Pass Category Management Props
+                        categories={categories}
+                        onUpdateCategory={handleUpdateCategory}
+                        onDeleteCategory={handleDeleteCategory}
                     />
-                ) : <Home currentCity={currentCity} posts={posts} announcement={announcement} onPostClick={handlePostClick} onMerchantClick={handleMerchantClick} onBannerClick={handleBannerClick} onCityClick={() => setCurrentView('CITY_SELECT')} onConsultClick={() => setCurrentView('SUPPORT_CHAT')} />;
+                ) : <Home currentCity={currentCity} posts={posts} announcement={announcement} onPostClick={handlePostClick} onMerchantClick={handleMerchantClick} onBannerClick={handleBannerClick} onCityClick={() => setCurrentView('CITY_SELECT')} onConsultClick={() => setCurrentView('SUPPORT_CHAT')} categories={categories} banners={banners} />;
 
             // --- Profile Sub-pages ---
             case 'MY_POSTS':
@@ -459,13 +584,14 @@ const App: React.FC = () => {
                     onBack={() => setCurrentView('PROFILE')} 
                     onPostClick={handlePostClick} 
                     onPublish={() => setCurrentView('PUBLISH')}
+                    categoryConfig={categories}
                 />;
             case 'MY_COLLECTIONS':
-                return <MyCollections posts={posts} onBack={() => setCurrentView('PROFILE')} onPostClick={handlePostClick} />;
+                return <MyCollections posts={posts} onBack={() => setCurrentView('PROFILE')} onPostClick={handlePostClick} categoryConfig={categories} />;
             case 'MY_HISTORY':
-                return <MyHistory posts={posts} onBack={() => setCurrentView('PROFILE')} onPostClick={handlePostClick} />;
+                return <MyHistory posts={posts} onBack={() => setCurrentView('PROFILE')} onPostClick={handlePostClick} categoryConfig={categories} />;
             case 'MY_ORDERS':
-                return <MyOrders onBack={() => setCurrentView('PROFILE')} />;
+                return <MyOrders onBack={() => setCurrentView('PROFILE')} onShowToast={showToast} />;
             case 'WALLET':
                 return <Wallet onBack={() => setCurrentView('PROFILE')} />;
             case 'MERCHANT_ENTRY':
@@ -474,7 +600,7 @@ const App: React.FC = () => {
                 return <AboutUs onBack={() => setCurrentView('PROFILE')} />;
                 
             default:
-                return <Home currentCity={currentCity} posts={posts} announcement={announcement} onPostClick={handlePostClick} onMerchantClick={handleMerchantClick} onBannerClick={handleBannerClick} onCityClick={() => setCurrentView('CITY_SELECT')} onConsultClick={() => setCurrentView('SUPPORT_CHAT')} />;
+                return <Home currentCity={currentCity} posts={posts} announcement={announcement} onPostClick={handlePostClick} onMerchantClick={handleMerchantClick} onBannerClick={handleBannerClick} onCityClick={() => setCurrentView('CITY_SELECT')} onConsultClick={() => setCurrentView('SUPPORT_CHAT')} categories={categories} banners={banners} />;
         }
     };
 

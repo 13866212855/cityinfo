@@ -1,6 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { CATEGORY_CONFIG, MOCK_BANNERS } from '../constants';
-import { CategoryType, Post, BannerAd } from '../types';
+import { CategoryType, Post, BannerAd, SysCategory } from '../types';
 import PostCard from '../components/PostCard';
 
 interface HomeProps {
@@ -12,6 +11,8 @@ interface HomeProps {
     onMerchantClick: (id: string) => void;
     onBannerClick: (banner: BannerAd) => void;
     onConsultClick: () => void;
+    categories: Record<string, SysCategory>;
+    banners: BannerAd[];
 }
 
 type TabType = 'RECOMMENDED' | 'NEARBY' | 'NEWEST';
@@ -24,11 +25,23 @@ const Home: React.FC<HomeProps> = ({
     onPostClick, 
     onMerchantClick, 
     onBannerClick,
-    onConsultClick 
+    onConsultClick,
+    categories,
+    banners
 }) => {
     const [activeCategory, setActiveCategory] = useState<CategoryType | 'ALL'>('ALL');
     const [activeTab, setActiveTab] = useState<TabType>('RECOMMENDED');
     const [searchTerm, setSearchTerm] = useState('');
+
+    // Process categories to ensure they have valid keys and are sorted
+    const categoryList = useMemo(() => {
+        return Object.entries(categories)
+            .map(([k, v]) => ({
+                ...(v as SysCategory),
+                key: (v as SysCategory).key || k // Vital fix: Ensure key exists (fallback to object key if missing in value)
+            }))
+            .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    }, [categories]);
 
     const filteredPosts = useMemo(() => {
         // 1. Filter by Category and Search Term
@@ -44,15 +57,12 @@ const Home: React.FC<HomeProps> = ({
         if (activeTab === 'NEWEST') {
             res = [...res].sort((a, b) => b.publishTime - a.publishTime);
         } else if (activeTab === 'NEARBY') {
-            // Helper to parse distance strings like "0.5km" to 0.5
-            // If distance is missing, treat as far away (999km)
             const getDist = (s?: string) => {
                 if (!s) return 9999;
                 return parseFloat(s.replace(/[^0-9.]/g, ''));
             };
             res = [...res].sort((a, b) => getDist(a.distance) - getDist(b.distance));
         } else if (activeTab === 'RECOMMENDED') {
-            // Recommended: Sticky posts first, then Newest
             res = [...res].sort((a, b) => {
                 if (a.isSticky !== b.isSticky) {
                     return a.isSticky ? -1 : 1;
@@ -92,18 +102,38 @@ const Home: React.FC<HomeProps> = ({
 
             {/* Category Grid */}
             <div className="grid grid-cols-5 gap-y-4 gap-x-2 p-4 bg-white mb-2">
-                {(Object.keys(CATEGORY_CONFIG) as CategoryType[]).map((cat) => (
-                    <div 
-                        key={cat} 
-                        className="flex flex-col items-center cursor-pointer group"
-                        onClick={() => setActiveCategory(activeCategory === cat ? 'ALL' : cat)}
-                    >
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center mb-1 transition-transform group-active:scale-95 ${activeCategory === cat ? 'ring-2 ring-offset-2 ring-primary' : ''} ${CATEGORY_CONFIG[cat].color}`}>
-                            <i className={`fa-solid ${CATEGORY_CONFIG[cat].icon} text-lg`}></i>
+                {categoryList.map((cat) => {
+                    const isSelected = activeCategory === cat.key;
+                    const isAnySelected = activeCategory !== 'ALL';
+                    
+                    // Visual Logic:
+                    // 1. If NO selection (ALL): Show all colored.
+                    // 2. If Selection exists:
+                    //    - Selected Item: Show colored + highlight ring.
+                    //    - Others: Show Gray + Muted text.
+                    const isActive = !isAnySelected || isSelected;
+
+                    const containerStyle = isActive
+                        ? `${cat.color} ${isSelected ? 'ring-2 ring-offset-2 ring-primary shadow-lg scale-110' : ''}`
+                        : 'bg-gray-50 text-gray-300 scale-95 border border-gray-100'; // Grayed out style
+                    
+                    const labelStyle = isSelected 
+                        ? 'text-primary font-bold' 
+                        : (isAnySelected ? 'text-gray-300' : 'text-gray-600 font-medium');
+
+                    return (
+                        <div 
+                            key={cat.key} 
+                            className="flex flex-col items-center cursor-pointer group"
+                            onClick={() => setActiveCategory(activeCategory === cat.key ? 'ALL' : cat.key as CategoryType)}
+                        >
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center mb-1 transition-all duration-300 group-active:scale-95 ${containerStyle}`}>
+                                <i className={`fa-solid ${cat.icon} text-lg`}></i>
+                            </div>
+                            <span className={`text-[10px] transition-colors duration-300 ${labelStyle}`}>{cat.label}</span>
                         </div>
-                        <span className="text-[10px] text-gray-600 font-medium">{CATEGORY_CONFIG[cat].label}</span>
-                    </div>
-                ))}
+                    );
+                })}
             </div>
 
             {/* Announcement / Marquee Bar */}
@@ -119,9 +149,9 @@ const Home: React.FC<HomeProps> = ({
             )}
 
             {/* Banners (Clickable & Scrollable) */}
-            {activeCategory === 'ALL' && (
+            {activeCategory === 'ALL' && banners.length > 0 && (
                 <div className="px-4 mb-4 overflow-x-auto no-scrollbar flex gap-3 snap-x snap-mandatory">
-                    {MOCK_BANNERS.map(banner => (
+                    {banners.map(banner => (
                         <div 
                             key={banner.id} 
                             onClick={() => onBannerClick(banner)}
@@ -170,6 +200,8 @@ const Home: React.FC<HomeProps> = ({
                             post={post} 
                             onClick={onPostClick} 
                             onMerchantClick={onMerchantClick}
+                            // Pass the categories map so PostCard can look up label
+                            categoryConfig={categories}
                         />
                     ))
                 ) : (

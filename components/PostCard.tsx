@@ -1,14 +1,15 @@
 import React from 'react';
-import { Post, CategoryType } from '../types';
+import { Post, SysCategory } from '../types';
 import { CATEGORY_CONFIG } from '../constants';
 
 interface PostCardProps {
   post: Post;
   onClick: (post: Post) => void;
   onMerchantClick: (merchantId: string) => void;
+  categoryConfig?: Record<string, SysCategory>; // Added prop
 }
 
-const PostCard: React.FC<PostCardProps> = ({ post, onClick, onMerchantClick }) => {
+const PostCard: React.FC<PostCardProps> = ({ post, onClick, onMerchantClick, categoryConfig }) => {
   const timeAgo = (date: number) => {
     const seconds = Math.floor((Date.now() - date) / 1000);
     if (seconds < 60) return '刚刚';
@@ -25,6 +26,9 @@ const PostCard: React.FC<PostCardProps> = ({ post, onClick, onMerchantClick }) =
       onMerchantClick(post.merchantId);
     }
   };
+
+  // Determine label: try dynamic config, fall back to constant, fall back to key
+  const categoryLabel = categoryConfig?.[post.category]?.label || CATEGORY_CONFIG[post.category]?.label || post.category;
 
   return (
     <div 
@@ -51,7 +55,7 @@ const PostCard: React.FC<PostCardProps> = ({ post, onClick, onMerchantClick }) =
         )}
         <div className="flex flex-col justify-between flex-grow h-24">
             <div className="flex flex-wrap gap-1 content-start">
-                <span className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{CATEGORY_CONFIG[post.category].label}</span>
+                <span className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{categoryLabel}</span>
                 {post.attributes.slice(0, 2).map((attr, idx) => (
                     <span key={idx} className="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
                         {attr.value}

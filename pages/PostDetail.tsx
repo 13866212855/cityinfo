@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Post, CategoryType } from '../types';
+import { Post, CategoryType, SysCategory } from '../types';
 import { CATEGORY_CONFIG, MOCK_MERCHANTS } from '../constants';
 import MapViewer from '../components/MapViewer';
 
@@ -8,9 +8,10 @@ interface PostDetailProps {
     onBack: () => void;
     onMerchantClick: (id: string) => void;
     onShowToast: (msg: string) => void;
+    categoryConfig?: Record<string, SysCategory>;
 }
 
-const PostDetail: React.FC<PostDetailProps> = ({ post, onBack, onMerchantClick, onShowToast }) => {
+const PostDetail: React.FC<PostDetailProps> = ({ post, onBack, onMerchantClick, onShowToast, categoryConfig }) => {
     const [showMap, setShowMap] = useState(false);
     const [isFavorited, setIsFavorited] = useState(false);
     const isMerchant = !!post.merchantId;
@@ -22,6 +23,9 @@ const PostDetail: React.FC<PostDetailProps> = ({ post, onBack, onMerchantClick, 
         setIsFavorited(!isFavorited);
         onShowToast(isFavorited ? '已取消收藏' : '收藏成功');
     };
+
+    // Determine label: try dynamic config, fall back to constant, fall back to key
+    const categoryLabel = categoryConfig?.[post.category]?.label || CATEGORY_CONFIG[post.category]?.label || post.category;
 
     return (
         <div className="bg-white min-h-screen pb-20 relative">
@@ -71,7 +75,7 @@ const PostDetail: React.FC<PostDetailProps> = ({ post, onBack, onMerchantClick, 
                     </div>
                     
                     <div className="flex items-center gap-2 mb-4 text-xs text-gray-500">
-                        <span className="bg-gray-100 px-2 py-1 rounded text-gray-600">{CATEGORY_CONFIG[post.category].label}</span>
+                        <span className="bg-gray-100 px-2 py-1 rounded text-gray-600">{categoryLabel}</span>
                         <span>{post.viewCount} 次浏览</span>
                         <span>•</span>
                         <span>发布于 {new Date(post.publishTime).toLocaleDateString()}</span>
@@ -165,10 +169,14 @@ const PostDetail: React.FC<PostDetailProps> = ({ post, onBack, onMerchantClick, 
                     <i className={`${isFavorited ? 'fa-solid' : 'fa-regular'} fa-star text-lg`}></i>
                     <span className="text-[10px]">{isFavorited ? '已收藏' : '收藏'}</span>
                 </button>
-                 <button className="flex-[4] bg-primary text-white font-semibold rounded-full py-2 shadow-lg active:bg-blue-600 flex items-center justify-center gap-2">
+                 {/* Use anchor tag with tel: scheme for better mobile experience */}
+                 <a 
+                    href={`tel:${post.contactPhone}`}
+                    className="flex-[4] bg-primary text-white font-semibold rounded-full py-2 shadow-lg active:bg-blue-600 flex items-center justify-center gap-2"
+                 >
                     <i className="fa-solid fa-phone"></i>
                     拨打电话 {post.contactPhone}
-                </button>
+                </a>
             </div>
         </div>
     );

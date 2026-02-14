@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ChatMessage, WithdrawalRequest, WalletTransaction } from '../types';
+import { ChatMessage, WithdrawalRequest, WalletTransaction, Post, SysCategory } from '../types';
 import { getLLMConfig } from '../services/deepseek';
 import { api } from '../services/supabase';
 
@@ -10,6 +10,16 @@ interface AdminDashboardProps {
     announcement: string;
     onUpdateAnnouncement: (text: string) => void;
     onShowToast: (msg: string, type?: 'sms' | 'info') => void;
+    
+    // Content Management
+    posts?: Post[];
+    onDeletePost?: (id: string) => void;
+    onEditPost?: (post: Post) => void;
+
+    // Category Management
+    categories?: Record<string, SysCategory>;
+    onUpdateCategory?: (category: SysCategory) => void;
+    onDeleteCategory?: (key: string) => void;
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
@@ -18,11 +28,24 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     onBack,
     announcement,
     onUpdateAnnouncement,
-    onShowToast
+    onShowToast,
+    posts = [],
+    onDeletePost = (_: string) => {},
+    onEditPost = (_: Post) => {},
+    categories = {},
+    onUpdateCategory = (_: SysCategory) => {},
+    onDeleteCategory = (_: string) => {}
 }) => {
     const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
     const [replyInput, setReplyInput] = useState('');
-    const [activeTab, setActiveTab] = useState<'CHATS' | 'WALLET' | 'SETTINGS'>('CHATS');
+    const [activeTab, setActiveTab] = useState<'CHATS' | 'WALLET' | 'CONTENT' | 'CATEGORIES' | 'SETTINGS'>('CHATS');
+
+    // --- Content Mgmt State ---
+    const [editingPost, setEditingPost] = useState<Post | null>(null);
+
+    // --- Category Mgmt State ---
+    const [editingCategory, setEditingCategory] = useState<SysCategory | null>(null);
+    const [isAddingCategory, setIsAddingCategory] = useState(false);
 
     // --- Settings State ---
     const [announcementInput, setAnnouncementInput] = useState(announcement);
@@ -45,8 +68,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
     const [pendingRecharges, setPendingRecharges] = useState<WalletTransaction[]>([]); 
     
-    // Action loading state to prevent double clicks and show feedback
+    // Action loading state
     const [processingId, setProcessingId] = useState<string | null>(null);
+    const [isLoadingWallet, setIsLoadingWallet] = useState(false);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -58,31 +82,45 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         }
     }, [supportChats, selectedUserId]);
 
+    const loadWalletData = async () => {
+        setIsLoadingWallet(true);
+        try {
+            // Load QR
+            const url = await api.getSystemConfig('recharge_qr');
+            if (url) setRechargeQrUrl(url);
+
+            // Load Withdrawals
+            const withdrawalList = await api.getWithdrawals();
+            setWithdrawals(withdrawalList);
+
+            // Load Pending Recharges & Payments
+            const rechargeList = await api.getPendingRecharges();
+            setPendingRecharges(rechargeList);
+        } catch (e) {
+            console.error("Failed to load wallet data", e);
+            onShowToast('数据加载失败，请检查网络或数据库连接', 'info');
+        } finally {
+            setIsLoadingWallet(false);
+        }
+    };
+
     // Load Wallet Data when tab changes
     useEffect(() => {
         if (activeTab === 'WALLET') {
-            const loadWalletData = async () => {
-                // Load QR
-                const url = await api.getSystemConfig('recharge_qr');
-                if (url) setRechargeQrUrl(url);
-
-                // Load Withdrawals
-                const withdrawalList = await api.getWithdrawals();
-                setWithdrawals(withdrawalList);
-
-                // Load Pending Recharges
-                const rechargeList = await api.getPendingRecharges();
-                setPendingRecharges(rechargeList);
-            };
             loadWalletData();
         }
     }, [activeTab]);
 
-    const activeUserIds = Object.keys(supportChats).sort((a, b) => {
-        const lastA = supportChats[a][supportChats[a].length - 1]?.timestamp || 0;
-        const lastB = supportChats[b][supportChats[b].length - 1]?.timestamp || 0;
-        return lastB - lastA;
-    });
+    // Filter and Sort Chats
+    // 1. Exclude 'system' user (used for config storage)
+    // 2. Sort by latest message timestamp
+    const activeUserIds = Object.keys(supportChats)
+        .filter(id => id !== 'system' && !id.startsWith('config_'))
+        .sort((a, b) => {
+            const lastA = supportChats[a][supportChats[a].length - 1]?.timestamp || 0;
+            const lastB = supportChats[b][supportChats[b].length - 1]?.timestamp || 0;
+            return lastB - lastA;
+        });
 
     const handleSendReply = () => {
         if (!selectedUserId || !replyInput.trim()) return;
@@ -129,9 +167,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     // Update Withdrawal Status
     const handleUpdateWithdrawalStatus = async (id: string, status: 'COMPLETED' | 'REJECTED') => {
         if (processingId) return;
-        const confirmMsg = status === 'COMPLETED' ? '确认标记为已打款？' : '确认驳回此申请？';
-        if (!window.confirm(confirmMsg)) return;
-
+        
         setProcessingId(id);
         try {
             await api.updateWithdrawalStatus(id, status);
@@ -156,9 +192,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     // Review Recharge (New)
     const handleReviewRecharge = async (id: string, status: 'SUCCESS' | 'FAILED') => {
          if (processingId) return;
-         const confirmMsg = status === 'SUCCESS' ? '确认已收到款项并允许充值？' : '确认未收到款项并驳回充值？';
-         if (!window.confirm(confirmMsg)) return;
-
+         
          setProcessingId(id);
          try {
              await api.reviewRecharge(id, status);
@@ -167,15 +201,33 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
              setPendingRecharges(prev => prev.filter(item => item.id !== id));
 
              if (status === 'SUCCESS') {
-                 onShowToast('✅ 充值审核通过，资金已入账', 'info');
+                 onShowToast('✅ 资金已确认收款', 'info');
              } else {
-                 onShowToast('🚫 充值申请已驳回', 'info');
+                 onShowToast('🚫 申请已驳回', 'info');
              }
          } catch (e) {
+             console.error(e);
              onShowToast('⚠️ 操作失败，请重试', 'info');
          } finally {
              setProcessingId(null);
          }
+    };
+
+    const handleSavePostEdit = () => {
+        if (!editingPost) return;
+        onEditPost(editingPost);
+        setEditingPost(null);
+    };
+
+    const handleSaveCategory = () => {
+        if (!editingCategory) return;
+        if (!editingCategory.key || !editingCategory.label) {
+            alert('标识符(Key)和名称(Label)不能为空');
+            return;
+        }
+        onUpdateCategory(editingCategory);
+        setEditingCategory(null);
+        setIsAddingCategory(false);
     };
 
     const formatTime = (ts: number) => {
@@ -187,12 +239,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         });
     };
 
-    // Helper to mask API key securely
     const getMaskedApiKey = (key: string) => {
         if (!key) return '';
         if (key.length <= 8) return '********';
         return `${key.substring(0, 3)}...${'*'.repeat(8)}...${key.substring(key.length - 4)}`;
     };
+
+    const getMessagePreview = (content: string) => {
+        if (content.startsWith('data:image') || content.startsWith('http')) {
+            return '[图片]';
+        }
+        return content;
+    };
+
+    // Vital fix: Ensure key exists for every category in list. 
+    // Fallback to object key if data is malformed or from older config.
+    const categoryList = Object.entries(categories).map(([k, v]) => ({
+        ...(v as SysCategory),
+        key: (v as SysCategory).key || k
+    })).sort((a,b) => (a.sort_order || 0) - (b.sort_order || 0));
 
     // --- List View & Settings View ---
     if (!selectedUserId) {
@@ -207,30 +272,352 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
 
                 {/* Dashboard Tabs */}
-                <div className="flex border-b border-gray-200 bg-white sticky top-[60px] z-10 shadow-sm">
-                    <button 
-                        onClick={() => setActiveTab('CHATS')}
-                        className={`flex-1 py-3 text-sm font-medium transition-colors ${activeTab === 'CHATS' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-800'}`}
-                    >
-                        <i className="fa-solid fa-comments mr-2"></i>
-                        咨询
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('WALLET')}
-                        className={`flex-1 py-3 text-sm font-medium transition-colors ${activeTab === 'WALLET' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-800'}`}
-                    >
-                        <i className="fa-solid fa-wallet mr-2"></i>
-                        财务
-                    </button>
-                    <button 
-                        onClick={() => setActiveTab('SETTINGS')}
-                        className={`flex-1 py-3 text-sm font-medium transition-colors ${activeTab === 'SETTINGS' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-800'}`}
-                    >
-                        <i className="fa-solid fa-sliders mr-2"></i>
-                        系统
-                    </button>
+                <div className="flex border-b border-gray-200 bg-white sticky top-[60px] z-10 shadow-sm overflow-x-auto no-scrollbar">
+                    {[
+                        { id: 'CHATS', label: '咨询', icon: 'fa-comments' },
+                        { id: 'CONTENT', label: '内容', icon: 'fa-layer-group' },
+                        { id: 'CATEGORIES', label: '分类', icon: 'fa-table-cells-large' },
+                        { id: 'WALLET', label: '财务', icon: 'fa-wallet' },
+                        { id: 'SETTINGS', label: '系统', icon: 'fa-sliders' },
+                    ].map(tab => (
+                        <button 
+                            key={tab.id}
+                            onClick={() => setActiveTab(tab.id as any)}
+                            className={`flex-1 py-3 px-4 text-sm font-medium transition-colors whitespace-nowrap flex items-center justify-center ${activeTab === tab.id ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-800'}`}
+                        >
+                            <i className={`fa-solid ${tab.icon} mr-2`}></i>
+                            {tab.label}
+                        </button>
+                    ))}
                 </div>
                 
+                {/* Content Tab */}
+                {activeTab === 'CONTENT' && (
+                    <div className="p-4 space-y-3 pb-20">
+                        {posts.length === 0 ? (
+                            <div className="text-center text-gray-400 mt-20">暂无内容发布</div>
+                        ) : (
+                            posts.map(post => (
+                                <div key={post.id} className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 flex gap-3">
+                                    {/* Thumbnail */}
+                                    <div className="w-20 h-20 bg-gray-100 rounded-lg flex-shrink-0 overflow-hidden">
+                                        {post.images.length > 0 ? (
+                                            <img src={post.images[0]} className="w-full h-full object-cover" alt={post.title} />
+                                        ) : (
+                                            <div className="w-full h-full flex items-center justify-center text-gray-300">
+                                                <i className="fa-solid fa-image"></i>
+                                            </div>
+                                        )}
+                                    </div>
+                                    
+                                    {/* Info */}
+                                    <div className="flex-1 flex flex-col justify-between">
+                                        <div>
+                                            <h3 className="font-bold text-gray-800 line-clamp-1 text-sm">{post.title}</h3>
+                                            <div className="flex items-center gap-2 mt-1">
+                                                <span className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-500 rounded">{post.category}</span>
+                                                {post.isSticky && <span className="text-[10px] px-1.5 py-0.5 bg-red-100 text-red-500 rounded">置顶</span>}
+                                            </div>
+                                            <div className="text-xs text-gray-400 mt-1 flex gap-2">
+                                                <span>{post.authorName}</span>
+                                                <span>•</span>
+                                                <span>{new Date(post.publishTime).toLocaleDateString()}</span>
+                                            </div>
+                                        </div>
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-red-500 font-bold text-sm">{post.price}</span>
+                                            
+                                            <div className="flex gap-2">
+                                                <button 
+                                                    onClick={() => setEditingPost(post)}
+                                                    className="w-7 h-7 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center hover:bg-blue-100 hover:text-blue-600 transition-colors"
+                                                >
+                                                    <i className="fa-solid fa-pen text-xs"></i>
+                                                </button>
+                                                <button 
+                                                    onClick={() => onDeletePost(post.id)}
+                                                    className="w-7 h-7 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center hover:bg-red-100 hover:text-red-600 transition-colors"
+                                                >
+                                                    <i className="fa-solid fa-trash text-xs"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                )}
+
+                {/* Categories Tab */}
+                {activeTab === 'CATEGORIES' && (
+                    <div className="p-4 space-y-3 pb-20">
+                        <button 
+                            onClick={() => {
+                                setIsAddingCategory(true);
+                                setEditingCategory({ key: '', label: '', icon: 'fa-circle-question', color: 'bg-gray-100 text-gray-600', sort_order: 99 });
+                            }}
+                            className="w-full py-3 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 font-medium hover:border-blue-500 hover:text-blue-500 transition-colors mb-2 flex items-center justify-center gap-2"
+                        >
+                            <i className="fa-solid fa-plus"></i> 添加新分类
+                        </button>
+
+                        {categoryList.map(cat => (
+                            <div key={cat.key} className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${cat.color}`}>
+                                        <i className={`fa-solid ${cat.icon}`}></i>
+                                    </div>
+                                    <div>
+                                        <h3 className="font-bold text-gray-800 text-sm">{cat.label}</h3>
+                                        <div className="flex gap-2 text-xs text-gray-400 mt-0.5">
+                                            <span>Key: {cat.key}</span>
+                                            <span>排序: {cat.sort_order}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button 
+                                        onClick={() => {
+                                            setIsAddingCategory(false);
+                                            // Ensure key is passed even if missing in raw data
+                                            setEditingCategory({...cat, key: cat.key || ''}); 
+                                        }}
+                                        className="w-8 h-8 rounded-full bg-gray-50 text-gray-600 hover:bg-blue-100 hover:text-blue-600 flex items-center justify-center"
+                                    >
+                                        <i className="fa-solid fa-pen text-xs"></i>
+                                    </button>
+                                    <button 
+                                        onClick={() => onDeleteCategory(cat.key)}
+                                        className="w-8 h-8 rounded-full bg-gray-50 text-gray-600 hover:bg-red-100 hover:text-red-600 flex items-center justify-center"
+                                    >
+                                        <i className="fa-solid fa-trash text-xs"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                {/* Edit Post Modal */}
+                {editingPost && (
+                    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 backdrop-blur-sm">
+                        <div className="bg-white w-full max-w-sm rounded-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-200">
+                            <div className="bg-gray-50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
+                                <h3 className="font-bold text-gray-800">编辑商品</h3>
+                                <button onClick={() => setEditingPost(null)} className="text-gray-400 hover:text-gray-600">
+                                    <i className="fa-solid fa-xmark text-lg"></i>
+                                </button>
+                            </div>
+                            
+                            <div className="p-4 space-y-4 max-h-[70vh] overflow-y-auto">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">标题</label>
+                                    <input 
+                                        type="text" 
+                                        className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none focus:border-blue-500"
+                                        value={editingPost.title}
+                                        onChange={(e) => setEditingPost({...editingPost, title: e.target.value})}
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">分类</label>
+                                    <select 
+                                        className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none focus:border-blue-500"
+                                        value={editingPost.category}
+                                        onChange={(e) => setEditingPost({...editingPost, category: e.target.value as any})}
+                                    >
+                                        {categoryList.map((cat) => (
+                                            <option key={cat.key} value={cat.key}>{cat.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 mb-1">价格</label>
+                                        <input 
+                                            type="text" 
+                                            className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none focus:border-blue-500"
+                                            value={editingPost.price}
+                                            onChange={(e) => setEditingPost({...editingPost, price: e.target.value})}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 mb-1">位置</label>
+                                        <input 
+                                            type="text" 
+                                            className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none focus:border-blue-500"
+                                            value={editingPost.location}
+                                            onChange={(e) => setEditingPost({...editingPost, location: e.target.value})}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">联系电话</label>
+                                    <input 
+                                        type="text" 
+                                        className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none focus:border-blue-500"
+                                        value={editingPost.contactPhone}
+                                        onChange={(e) => setEditingPost({...editingPost, contactPhone: e.target.value})}
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">描述</label>
+                                    <textarea 
+                                        rows={4}
+                                        className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none focus:border-blue-500 resize-none"
+                                        value={editingPost.description}
+                                        onChange={(e) => setEditingPost({...editingPost, description: e.target.value})}
+                                    />
+                                </div>
+
+                                <div className="flex items-center gap-3 bg-yellow-50 p-3 rounded-lg border border-yellow-100">
+                                    <input 
+                                        type="checkbox" 
+                                        id="editSticky"
+                                        checked={editingPost.isSticky}
+                                        onChange={(e) => setEditingPost({...editingPost, isSticky: e.target.checked})}
+                                        className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                                    />
+                                    <label htmlFor="editSticky" className="text-sm font-medium text-yellow-800">
+                                        置顶推广 (Boost)
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div className="p-4 border-t border-gray-100 flex gap-3">
+                                <button 
+                                    onClick={() => setEditingPost(null)}
+                                    className="flex-1 py-2.5 rounded-lg border border-gray-200 text-gray-600 font-medium text-sm hover:bg-gray-50"
+                                >
+                                    取消
+                                </button>
+                                <button 
+                                    onClick={handleSavePostEdit}
+                                    className="flex-1 py-2.5 rounded-lg bg-blue-600 text-white font-medium text-sm hover:bg-blue-700 shadow-md"
+                                >
+                                    保存修改
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Edit Category Modal */}
+                {editingCategory && (
+                    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 backdrop-blur-sm">
+                        <div className="bg-white w-full max-w-sm rounded-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-200">
+                            <div className="bg-gray-50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
+                                <h3 className="font-bold text-gray-800">{isAddingCategory ? '添加分类' : '编辑分类'}</h3>
+                                <button onClick={() => setEditingCategory(null)} className="text-gray-400 hover:text-gray-600">
+                                    <i className="fa-solid fa-xmark text-lg"></i>
+                                </button>
+                            </div>
+                            
+                            <div className="p-4 space-y-4 max-h-[70vh] overflow-y-auto">
+                                <div className="flex justify-center mb-4">
+                                     <div className={`w-16 h-16 rounded-full flex items-center justify-center ${editingCategory.color} text-2xl`}>
+                                        <i className={`fa-solid ${editingCategory.icon}`}></i>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 mb-1">标识符 (Key)</label>
+                                        <input 
+                                            type="text" 
+                                            className={`w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none ${isAddingCategory ? 'focus:border-blue-500' : 'opacity-60 cursor-not-allowed bg-gray-100'}`}
+                                            value={editingCategory.key || ''} 
+                                            onChange={(e) => setEditingCategory({...editingCategory, key: e.target.value.toUpperCase()})}
+                                            readOnly={!isAddingCategory}
+                                            placeholder="如: HOUSING"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 mb-1">显示名称</label>
+                                        <input 
+                                            type="text" 
+                                            className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none focus:border-blue-500"
+                                            value={editingCategory.label}
+                                            onChange={(e) => setEditingCategory({...editingCategory, label: e.target.value})}
+                                            placeholder="如: 房屋租赁"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">图标 (FontAwesome Class)</label>
+                                    <input 
+                                        type="text" 
+                                        className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none focus:border-blue-500"
+                                        value={editingCategory.icon}
+                                        onChange={(e) => setEditingCategory({...editingCategory, icon: e.target.value})}
+                                        placeholder="如: fa-home"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">颜色样式 (Tailwind)</label>
+                                    <input 
+                                        type="text" 
+                                        className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none focus:border-blue-500 mb-2"
+                                        value={editingCategory.color}
+                                        onChange={(e) => setEditingCategory({...editingCategory, color: e.target.value})}
+                                        placeholder="如: bg-blue-100 text-blue-600"
+                                    />
+                                    <div className="flex gap-2">
+                                        {[
+                                            'bg-blue-100 text-blue-600',
+                                            'bg-orange-100 text-orange-600',
+                                            'bg-green-100 text-green-600',
+                                            'bg-purple-100 text-purple-600',
+                                            'bg-red-100 text-red-600',
+                                            'bg-yellow-100 text-yellow-600'
+                                        ].map(c => (
+                                            <button 
+                                                key={c}
+                                                onClick={() => setEditingCategory({...editingCategory, color: c})}
+                                                className={`w-6 h-6 rounded-full border border-black/10 ${c.split(' ')[0]}`}
+                                            ></button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">排序权重 (越小越靠前)</label>
+                                    <input 
+                                        type="number" 
+                                        className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-sm outline-none focus:border-blue-500"
+                                        value={editingCategory.sort_order}
+                                        onChange={(e) => setEditingCategory({...editingCategory, sort_order: parseInt(e.target.value) || 0})}
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="p-4 border-t border-gray-100 flex gap-3">
+                                <button 
+                                    onClick={() => setEditingCategory(null)}
+                                    className="flex-1 py-2.5 rounded-lg border border-gray-200 text-gray-600 font-medium text-sm hover:bg-gray-50"
+                                >
+                                    取消
+                                </button>
+                                <button 
+                                    onClick={handleSaveCategory}
+                                    disabled={!editingCategory?.key || !editingCategory?.label}
+                                    className={`flex-1 py-2.5 rounded-lg text-white font-medium text-sm shadow-md transition-all ${(!editingCategory?.key || !editingCategory?.label) ? 'bg-blue-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+                                >
+                                    保存
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                
+                {/* Chat List Tab */}
                 {activeTab === 'CHATS' && (
                     <div className="p-4">
                         {activeUserIds.length === 0 ? (
@@ -242,27 +629,37 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             activeUserIds.map(userId => {
                                 const msgs = supportChats[userId];
                                 const lastMsg = msgs[msgs.length - 1];
+                                const lastIsAdmin = lastMsg.role === 'admin' || lastMsg.role === 'assistant';
+                                // Generate a deterministic avatar color based on userId length
+                                const colors = ['bg-blue-100 text-blue-600', 'bg-green-100 text-green-600', 'bg-purple-100 text-purple-600', 'bg-orange-100 text-orange-600'];
+                                const avatarColor = colors[userId.length % colors.length];
+
                                 return (
                                     <div 
                                         key={userId}
                                         onClick={() => setSelectedUserId(userId)}
-                                        className="bg-white p-4 rounded-xl shadow-sm mb-3 cursor-pointer active:bg-blue-50 transition-colors border border-gray-100 hover:shadow-md"
+                                        className="bg-white p-4 rounded-xl shadow-sm mb-3 cursor-pointer active:bg-blue-50 transition-all border border-gray-100 hover:shadow-md flex items-center gap-3"
                                     >
-                                        <div className="flex justify-between items-center mb-1">
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-xs">
-                                                    {userId.substring(0, 2).toUpperCase()}
-                                                </div>
-                                                <h3 className="font-bold text-gray-800">{userId}</h3>
-                                            </div>
-                                            <span className="text-xs text-gray-400">
-                                                {formatTime(lastMsg.timestamp)}
-                                            </span>
+                                        <div className={`w-12 h-12 rounded-full ${avatarColor} flex items-center justify-center font-bold text-lg flex-shrink-0`}>
+                                            {userId.substring(0, 2).toUpperCase()}
                                         </div>
-                                        <p className="text-sm text-gray-600 truncate pl-10">
-                                            {lastMsg.role === 'admin' ? <span className="text-blue-500 font-bold mr-1">[已回复]</span> : ''}
-                                            {lastMsg.content}
-                                        </p>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex justify-between items-center mb-1">
+                                                <h3 className="font-bold text-gray-800 text-sm truncate flex items-center gap-2">
+                                                    用户 {userId.substring(0, 6)}...
+                                                    {!lastIsAdmin && <span className="w-2 h-2 rounded-full bg-red-500"></span>}
+                                                </h3>
+                                                <span className="text-xs text-gray-400 flex-shrink-0">
+                                                    {formatTime(lastMsg.timestamp)}
+                                                </span>
+                                            </div>
+                                            <div className="flex items-center text-sm">
+                                                {lastIsAdmin && <i className="fa-solid fa-reply text-gray-400 mr-1 text-xs"></i>}
+                                                <p className={`truncate ${lastIsAdmin ? 'text-gray-400' : 'text-gray-700 font-medium'}`}>
+                                                    {getMessagePreview(lastMsg.content)}
+                                                </p>
+                                            </div>
+                                        </div>
                                     </div>
                                 );
                             })
@@ -272,38 +669,62 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 {activeTab === 'WALLET' && (
                     <div className="p-4 space-y-6">
-                        {/* 1. Recharge Audit (New) */}
+                        {/* Refresh Button - NEW */}
+                        <div className="flex justify-end -mt-2">
+                            <button 
+                                onClick={loadWalletData}
+                                disabled={isLoadingWallet}
+                                className="text-xs flex items-center gap-1 text-blue-600 bg-blue-50 px-3 py-1.5 rounded-full hover:bg-blue-100 transition-colors"
+                            >
+                                <i className={`fa-solid fa-rotate ${isLoadingWallet ? 'fa-spin' : ''}`}></i>
+                                刷新数据
+                            </button>
+                        </div>
+
+                        {/* 1. Recharge/Payment Audit */}
                         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                             <div className="bg-gray-50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
-                                <h3 className="font-bold text-gray-800 text-sm"><i className="fa-solid fa-file-invoice-dollar mr-2 text-green-500"></i>待审核充值</h3>
+                                <h3 className="font-bold text-gray-800 text-sm"><i className="fa-solid fa-file-invoice-dollar mr-2 text-green-500"></i>待审核资金 (充值/支付)</h3>
                             </div>
                             <div className="divide-y divide-gray-100">
                                 {pendingRecharges.length === 0 ? (
-                                    <div className="p-8 text-center text-gray-400 text-sm">暂无待审核充值</div>
+                                    <div className="p-8 text-center text-gray-400 text-sm">暂无待审核记录</div>
                                 ) : (
                                     pendingRecharges.map(tx => (
                                         <div key={tx.id} className="p-4 hover:bg-gray-50 transition-colors">
                                              <div className="flex justify-between items-center mb-1">
-                                                <span className="font-bold text-gray-800">¥{tx.amount}</span>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-bold text-gray-800">¥{tx.amount.toFixed(2)}</span>
+                                                    {tx.type === 'ORDER_PAYMENT' ? (
+                                                        <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded">订单支付</span>
+                                                    ) : (
+                                                        <span className="text-[10px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded">余额充值</span>
+                                                    )}
+                                                </div>
                                                 <span className="text-xs text-gray-400">{formatTime(tx.timestamp)}</span>
                                              </div>
                                              <div className="flex justify-between items-center text-sm text-gray-600 mb-2">
-                                                 <span>用户 ID: {tx.userId}</span>
+                                                 <span className="truncate max-w-[200px]">{tx.title}</span>
+                                                 <span className="text-xs text-gray-400 font-mono">ID: {tx.userId}</span>
                                              </div>
                                              <div className="flex gap-2 justify-end">
                                                  <button 
                                                     disabled={processingId === tx.id}
                                                     onClick={() => handleReviewRecharge(tx.id, 'FAILED')}
-                                                    className="px-3 py-1.5 border border-red-200 text-red-600 text-xs rounded hover:bg-red-50 disabled:opacity-50"
+                                                    className={`px-3 py-1.5 border border-red-200 text-red-600 text-xs rounded hover:bg-red-50 disabled:opacity-50 transition-colors ${processingId === tx.id ? 'opacity-50 cursor-not-allowed' : ''}`}
                                                  >
-                                                    {processingId === tx.id ? '处理中...' : '驳回'}
+                                                    {processingId === tx.id ? '提交中...' : '驳回'}
                                                  </button>
                                                  <button 
                                                     disabled={processingId === tx.id}
                                                     onClick={() => handleReviewRecharge(tx.id, 'SUCCESS')}
-                                                    className="px-3 py-1.5 bg-green-500 text-white text-xs rounded shadow hover:bg-green-600 disabled:opacity-50"
+                                                    className={`px-3 py-1.5 bg-green-500 text-white text-xs rounded shadow hover:bg-green-600 disabled:opacity-50 transition-colors flex items-center gap-1 ${processingId === tx.id ? 'opacity-50 cursor-not-allowed' : ''}`}
                                                  >
-                                                    {processingId === tx.id ? '处理中...' : '确认收款'}
+                                                    {processingId === tx.id ? (
+                                                        <><i className="fa-solid fa-spinner fa-spin"></i> 处理中</>
+                                                    ) : (
+                                                        '确认收款'
+                                                    )}
                                                  </button>
                                              </div>
                                         </div>
@@ -365,16 +786,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                                     <button 
                                                         disabled={processingId === req.id}
                                                         onClick={() => handleUpdateWithdrawalStatus(req.id, 'REJECTED')}
-                                                        className="px-3 py-1.5 border border-red-200 text-red-600 text-xs rounded hover:bg-red-50 disabled:opacity-50"
+                                                        className={`px-3 py-1.5 border border-red-200 text-red-600 text-xs rounded hover:bg-red-50 disabled:opacity-50 ${processingId === req.id ? 'opacity-50 cursor-not-allowed' : ''}`}
                                                     >
-                                                        {processingId === req.id ? '...' : '驳回'}
+                                                        {processingId === req.id ? '处理中...' : '驳回'}
                                                     </button>
                                                     <button 
                                                         disabled={processingId === req.id}
-                                                        className="px-3 py-1.5 bg-green-500 text-white text-xs rounded font-medium shadow hover:bg-green-600 disabled:opacity-50"
+                                                        className={`px-3 py-1.5 bg-green-500 text-white text-xs rounded font-medium shadow hover:bg-green-600 disabled:opacity-50 flex items-center gap-1 ${processingId === req.id ? 'opacity-50 cursor-not-allowed' : ''}`}
                                                         onClick={() => handleUpdateWithdrawalStatus(req.id, 'COMPLETED')}
                                                     >
-                                                        {processingId === req.id ? '处理中...' : '标记为已打款'}
+                                                        {processingId === req.id ? (
+                                                            <><i className="fa-solid fa-spinner fa-spin"></i> 处理中</>
+                                                        ) : '标记为已打款'}
                                                     </button>
                                                 </div>
                                             )}
@@ -414,140 +837,133 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                 )}
 
+                {/* Settings Tab */}
                 {activeTab === 'SETTINGS' && (
                     <div className="p-4 space-y-6 pb-20">
-                        {/* 1. Announcement Config */}
-                        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                            <div className="bg-gray-50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
-                                <h3 className="font-bold text-gray-800 text-sm"><i className="fa-solid fa-bullhorn mr-2 text-orange-500"></i>首页公告</h3>
-                            </div>
-                            <div className="p-4">
-                                <textarea 
-                                    className="w-full bg-gray-50 p-3 rounded-lg text-sm outline-none border border-gray-200 focus:border-blue-500 focus:bg-white transition-all"
-                                    rows={3}
-                                    value={announcementInput}
-                                    onChange={(e) => setAnnouncementInput(e.target.value)}
-                                    placeholder="请输入首页顶部滚动的公告内容..."
-                                ></textarea>
-                                <button 
-                                    onClick={handleSaveAnnouncement}
-                                    className="mt-3 w-full bg-white border border-gray-200 text-gray-700 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 active:scale-[0.98] transition-all"
-                                >
-                                    更新公告
-                                </button>
-                            </div>
+                        {/* 1. Announcement */}
+                        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                            <h3 className="font-bold text-gray-800 mb-3 text-sm">
+                                <i className="fa-solid fa-bullhorn text-orange-500 mr-2"></i>
+                                首页公告设置
+                            </h3>
+                            <textarea 
+                                className="w-full bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm outline-none focus:border-blue-500 resize-none mb-3"
+                                rows={3}
+                                value={announcementInput}
+                                onChange={(e) => setAnnouncementInput(e.target.value)}
+                                placeholder="输入滚动公告内容..."
+                            ></textarea>
+                            <button 
+                                onClick={handleSaveAnnouncement}
+                                className="w-full py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm"
+                            >
+                                更新公告
+                            </button>
                         </div>
 
-                        {/* 2. AI Model Config */}
-                        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                            <div className="bg-gray-50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
-                                <h3 className="font-bold text-gray-800 text-sm"><i className="fa-solid fa-robot mr-2 text-blue-500"></i>AI 模型配置 (DeepSeek)</h3>
-                                <span className="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">Pro</span>
-                            </div>
-                            <div className="p-4 space-y-4">
+                        {/* 2. LLM Config */}
+                        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                            <h3 className="font-bold text-gray-800 mb-3 text-sm flex items-center justify-between">
+                                <span><i className="fa-solid fa-robot text-purple-500 mr-2"></i>AI 模型参数 (DeepSeek)</span>
+                                <span className="text-[10px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded">Running</span>
+                            </h3>
+                            
+                            <div className="space-y-3">
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 mb-1.5">API Key</label>
-                                    <div className="relative group">
+                                    <label className="block text-xs font-medium text-gray-500 mb-1">API Key</label>
+                                    <div className="flex gap-2">
                                         <input 
                                             type={showApiKey ? "text" : "password"} 
-                                            className={`w-full bg-gray-50 p-2.5 rounded-lg text-sm outline-none border border-gray-200 focus:border-blue-500 ${showApiKey ? 'text-gray-500 select-none' : ''}`}
-                                            value={showApiKey ? getMaskedApiKey(llmConfig.apiKey) : llmConfig.apiKey}
-                                            onChange={(e) => {
-                                                // Prevent editing the mask directly. User must switch to hidden mode to edit.
-                                                if (!showApiKey) {
-                                                    setLlmConfig({...llmConfig, apiKey: e.target.value});
-                                                }
-                                            }}
+                                            autoComplete="new-password"
+                                            className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-2 text-xs outline-none font-mono"
+                                            value={llmConfig.apiKey}
                                             placeholder="sk-..."
-                                            readOnly={showApiKey} // Read-only when masking to prevent corruption
-                                            autoComplete="off"
-                                            onCopy={(e) => { e.preventDefault(); onShowToast('为保障安全，API Key 禁止复制', 'info'); }}
-                                            onCut={(e) => { e.preventDefault(); }}
+                                            onChange={(e) => setLlmConfig({...llmConfig, apiKey: e.target.value})}
                                         />
                                         <button 
                                             onClick={() => setShowApiKey(!showApiKey)}
-                                            className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 focus:outline-none"
-                                            title={showApiKey ? "隐藏 (切换至编辑模式)" : "查看掩码"}
+                                            className="w-8 h-8 flex items-center justify-center border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50"
                                         >
                                             <i className={`fa-solid ${showApiKey ? 'fa-eye-slash' : 'fa-eye'}`}></i>
                                         </button>
                                     </div>
-                                    {showApiKey && <p className="text-[10px] text-orange-500 mt-1">* 安全模式：仅显示首尾字符，禁止复制。如需修改请点击眼睛图标关闭预览。</p>}
                                 </div>
-                                
-                                <div className="grid grid-cols-2 gap-4">
+
+                                <div className="grid grid-cols-2 gap-3">
                                     <div>
-                                        <label className="block text-xs font-bold text-gray-500 mb-1.5">Model Name</label>
-                                        <select 
-                                            className="w-full bg-gray-50 p-2.5 rounded-lg text-sm outline-none border border-gray-200"
+                                        <label className="block text-xs font-medium text-gray-500 mb-1">Model Name</label>
+                                        <input 
+                                            type="text" 
+                                            className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-xs outline-none"
                                             value={llmConfig.model}
                                             onChange={(e) => setLlmConfig({...llmConfig, model: e.target.value})}
-                                        >
-                                            <option value="deepseek-chat">deepseek-chat</option>
-                                            <option value="deepseek-coder">deepseek-coder</option>
-                                            <option value="deepseek-reasoner">deepseek-reasoner</option>
-                                        </select>
+                                        />
                                     </div>
                                     <div>
-                                        <label className="block text-xs font-bold text-gray-500 mb-1.5">Max Tokens</label>
+                                        <label className="block text-xs font-medium text-gray-500 mb-1">Max Tokens</label>
                                         <input 
                                             type="number" 
-                                            className="w-full bg-gray-50 p-2.5 rounded-lg text-sm outline-none border border-gray-200"
+                                            className="w-full bg-gray-50 border border-gray-200 rounded-lg p-2 text-xs outline-none"
                                             value={llmConfig.maxTokens}
-                                            onChange={(e) => setLlmConfig({...llmConfig, maxTokens: Number(e.target.value)})}
+                                            onChange={(e) => setLlmConfig({...llmConfig, maxTokens: parseInt(e.target.value) || 2000})}
                                         />
                                     </div>
                                 </div>
 
                                 <div>
-                                    <div className="flex justify-between mb-1.5">
-                                        <label className="block text-xs font-bold text-gray-500">Temperature (创意度)</label>
-                                        <span className="text-xs font-mono text-blue-600">{llmConfig.temperature}</span>
-                                    </div>
+                                    <label className="block text-xs font-medium text-gray-500 mb-1">Temperature ({llmConfig.temperature})</label>
                                     <input 
                                         type="range" 
                                         min="0" 
-                                        max="1.5" 
+                                        max="2" 
                                         step="0.1"
-                                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
                                         value={llmConfig.temperature}
                                         onChange={(e) => setLlmConfig({...llmConfig, temperature: parseFloat(e.target.value)})}
                                     />
                                     <div className="flex justify-between text-[10px] text-gray-400 mt-1">
-                                        <span>严谨 (0.0)</span>
-                                        <span>平衡 (0.7)</span>
-                                        <span>发散 (1.5)</span>
+                                        <span>精确 (0.0)</span>
+                                        <span>创意 (2.0)</span>
                                     </div>
                                 </div>
 
                                 <button 
                                     onClick={handleSaveLLM}
-                                    className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 active:scale-[0.98] transition-all shadow-md shadow-blue-200"
+                                    className="w-full py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 transition-colors shadow-sm mt-2"
                                 >
-                                    保存 AI 配置
+                                    保存配置
                                 </button>
                             </div>
                         </div>
 
                         {/* 3. Platform Switches */}
-                        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                            <div className="bg-gray-50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
-                                <h3 className="font-bold text-gray-800 text-sm"><i className="fa-solid fa-toggle-on mr-2 text-purple-500"></i>平台功能开关</h3>
-                            </div>
-                            <div className="p-4 space-y-0 divide-y divide-gray-50">
+                        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                            <h3 className="font-bold text-gray-800 mb-4 text-sm">
+                                <i className="fa-solid fa-toggle-on text-blue-500 mr-2"></i>
+                                平台功能开关
+                            </h3>
+                            <div className="space-y-4">
                                 {Object.entries(platformSettings).map(([key, val]) => (
-                                    <div key={key} className="flex items-center justify-between py-3">
-                                        <span className="text-sm text-gray-700 font-medium">
-                                            {key === 'allowRegistration' && '开放新用户注册'}
-                                            {key === 'maintenanceMode' && '系统维护模式'}
-                                            {key === 'autoAudit' && '内容自动审核'}
-                                            {key === 'enableAds' && '显示广告位'}
-                                        </span>
+                                    <div key={key} className="flex items-center justify-between">
+                                        <div>
+                                            <div className="text-sm font-medium text-gray-700">
+                                                {key === 'allowRegistration' && '开放用户注册'}
+                                                {key === 'maintenanceMode' && '系统维护模式'}
+                                                {key === 'autoAudit' && '内容自动审核'}
+                                                {key === 'enableAds' && '显示商业广告'}
+                                            </div>
+                                            <div className="text-xs text-gray-400">
+                                                {key === 'allowRegistration' && '关闭后新用户无法注册'}
+                                                {key === 'maintenanceMode' && '仅管理员可访问'}
+                                                {key === 'autoAudit' && '使用 AI 预审发布内容'}
+                                                {key === 'enableAds' && '首页及详情页展示 Banner'}
+                                            </div>
+                                        </div>
                                         <button 
-                                            onClick={() => handleSwitchChange(key as keyof typeof platformSettings)}
-                                            className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors duration-300 ${val ? 'bg-green-500' : 'bg-gray-300'}`}
+                                            onClick={() => handleSwitchChange(key as any)}
+                                            className={`w-12 h-6 rounded-full p-1 transition-colors duration-200 ${val ? 'bg-green-500' : 'bg-gray-300'}`}
                                         >
-                                            <div className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform duration-300 ${val ? 'translate-x-5' : 'translate-x-0'}`}></div>
+                                            <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200 ${val ? 'translate-x-6' : 'translate-x-0'}`}></div>
                                         </button>
                                     </div>
                                 ))}
@@ -585,7 +1001,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 ? 'bg-blue-600 text-white rounded-tr-none' 
                                 : 'bg-white text-gray-800 rounded-tl-none border border-gray-200'
                             }`}>
-                                {msg.content}
+                                {getMessagePreview(msg.content) === '[图片]' ? (
+                                    <img src={msg.content} alt="user upload" className="rounded-lg max-w-full" />
+                                ) : (
+                                    msg.content
+                                )}
                             </div>
                         </div>
                         <span className={`text-[10px] text-gray-400 mt-1 px-2 ${msg.role === 'admin' ? 'text-right' : 'text-left'}`}>

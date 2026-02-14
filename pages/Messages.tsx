@@ -1,13 +1,13 @@
 import React from 'react';
-import { MOCK_CHATS } from '../constants';
 import { ChatSession } from '../types';
 
 interface MessagesProps {
     onOpenAI: () => void;
     onChatClick: (chat: ChatSession) => void;
+    sessions: ChatSession[];
 }
 
-const Messages: React.FC<MessagesProps> = ({ onOpenAI, onChatClick }) => {
+const Messages: React.FC<MessagesProps> = ({ onOpenAI, onChatClick, sessions }) => {
     const formatTime = (ts: number) => {
         const date = new Date(ts);
         const now = new Date();
@@ -44,7 +44,7 @@ const Messages: React.FC<MessagesProps> = ({ onOpenAI, onChatClick }) => {
                     </div>
                 </div>
 
-                {MOCK_CHATS.map(chat => (
+                {sessions.map(chat => (
                     <div 
                         key={chat.id} 
                         onClick={() => onChatClick(chat)}
@@ -67,6 +67,12 @@ const Messages: React.FC<MessagesProps> = ({ onOpenAI, onChatClick }) => {
                         </div>
                     </div>
                 ))}
+                
+                {sessions.length === 0 && (
+                    <div className="p-8 text-center text-gray-400 text-sm">
+                        暂无消息记录
+                    </div>
+                )}
             </div>
 
             <div className="p-8 text-center text-gray-400 text-xs">

@@ -1,6 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { CategoryType, Post, PostAttribute } from '../types';
-import { CATEGORY_CONFIG } from '../constants';
+import { CategoryType, Post, PostAttribute, SysCategory } from '../types';
 import { generateDescription } from '../services/deepseek';
 import { api } from '../services/supabase';
 import MapViewer from '../components/MapViewer';
@@ -8,9 +7,10 @@ import MapViewer from '../components/MapViewer';
 interface PublishProps {
     onBack: () => void;
     onPublish: (post: Post) => void;
+    categoryConfig: Record<string, SysCategory>;
 }
 
-const Publish: React.FC<PublishProps> = ({ onBack, onPublish }) => {
+const Publish: React.FC<PublishProps> = ({ onBack, onPublish, categoryConfig }) => {
     const [step, setStep] = useState<1 | 2>(1);
     const [selectedCategory, setSelectedCategory] = useState<CategoryType | null>(null);
     const [isGenerating, setIsGenerating] = useState(false);
@@ -79,7 +79,8 @@ const Publish: React.FC<PublishProps> = ({ onBack, onPublish }) => {
         }
         setIsGenerating(true);
         try {
-            const result = await generateDescription(title, CATEGORY_CONFIG[selectedCategory!].label, `${attr1} ${attr2}`);
+            const catLabel = categoryConfig[selectedCategory!]?.label || '通用';
+            const result = await generateDescription(title, catLabel, `${attr1} ${attr2}`);
             setDesc(result);
         } catch (e) {
             alert('AI 正在开小差，请稍后再试');
@@ -213,16 +214,17 @@ const Publish: React.FC<PublishProps> = ({ onBack, onPublish }) => {
                 </div>
                 {/* Updated to grid-cols-3 for better visual on step 1 */}
                 <div className="grid grid-cols-3 gap-3 p-4">
-                    {(Object.keys(CATEGORY_CONFIG) as CategoryType[]).map((cat) => (
+                    {/* Sort based on sort_order if available */}
+                    {(Object.values(categoryConfig) as SysCategory[]).sort((a,b) => (a.sort_order || 0) - (b.sort_order || 0)).map((cat) => (
                         <button 
-                            key={cat}
-                            onClick={() => { setSelectedCategory(cat); setStep(2); }}
+                            key={cat.key}
+                            onClick={() => { setSelectedCategory(cat.key as CategoryType); setStep(2); }}
                             className="flex flex-col items-center justify-center p-4 border rounded-xl hover:bg-gray-50 active:scale-95 transition-all"
                         >
-                             <div className={`w-12 h-12 rounded-full flex items-center justify-center mb-2 ${CATEGORY_CONFIG[cat].color}`}>
-                                <i className={`fa-solid ${CATEGORY_CONFIG[cat].icon} text-xl`}></i>
+                             <div className={`w-12 h-12 rounded-full flex items-center justify-center mb-2 ${cat.color}`}>
+                                <i className={`fa-solid ${cat.icon} text-xl`}></i>
                             </div>
-                            <span className="font-semibold text-gray-700 text-xs">{CATEGORY_CONFIG[cat].label}</span>
+                            <span className="font-semibold text-gray-700 text-xs">{cat.label}</span>
                         </button>
                     ))}
                 </div>
@@ -243,7 +245,7 @@ const Publish: React.FC<PublishProps> = ({ onBack, onPublish }) => {
 
             <div className="p-4 flex items-center justify-between border-b border-gray-100">
                 <button onClick={() => setStep(1)}><i className="fa-solid fa-arrow-left text-gray-500"></i></button>
-                <span className="font-bold text-lg">发布{CATEGORY_CONFIG[selectedCategory!].label}信息</span>
+                <span className="font-bold text-lg">发布{categoryConfig[selectedCategory!].label}信息</span>
                 <button onClick={handlePublish} className="text-primary font-bold text-sm">发布</button>
             </div>
 

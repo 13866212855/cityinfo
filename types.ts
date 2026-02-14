@@ -13,6 +13,15 @@ export enum CategoryType {
     AGRICULTURE = 'AGRICULTURE'
 }
 
+// New Interface for DB Categories
+export interface SysCategory {
+    key: string; // matches CategoryType
+    label: string;
+    icon: string;
+    color: string;
+    sort_order?: number;
+}
+
 export interface PostAttribute {
     key: string;
     label: string;
@@ -108,7 +117,7 @@ export interface WithdrawalRequest {
 export interface WalletTransaction {
     id: string;
     userId: string;
-    type: 'RECHARGE' | 'WITHDRAW' | 'INCOME' | 'EXPENSE'; // 充值 | 提现 | 收入 | 支出
+    type: 'RECHARGE' | 'WITHDRAW' | 'INCOME' | 'EXPENSE' | 'ORDER_PAYMENT'; // Added ORDER_PAYMENT
     title: string;
     amount: number; // Positive or Negative
     balanceAfter: number; // Balance after transaction
