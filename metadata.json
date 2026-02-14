@@ -1,0 +1,7 @@
+{
+  "name": "CityInfo - 城市脉动",
+  "description": "连接本地用户与商家的同城信息服务平台，提供实时供需信息、本地服务与动态分类。",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
