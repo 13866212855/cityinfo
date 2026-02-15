@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ChatMessage, WithdrawalRequest, WalletTransaction, Post, SysCategory } from '../types';
-import { getLLMConfig } from '../services/deepseek';
-import { api } from '../services/supabase';
+import { ChatMessage, WithdrawalRequest, WalletTransaction, Post, SysCategory, User } from '../types';
+import { api, validateFile, validateFileContent } from '../services/supabase';
 
 interface AdminDashboardProps {
+    user?: User; // Add user prop for permission check
     supportChats: Record<string, ChatMessage[]>; // Key: userId
     onReply: (userId: string, content: string) => void;
     onBack: () => void;
@@ -23,6 +23,7 @@ interface AdminDashboardProps {
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
+    user,
     supportChats, 
     onReply, 
     onBack,
@@ -51,8 +52,42 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const [announcementInput, setAnnouncementInput] = useState(announcement);
     
     // LLM Settings
-    const [llmConfig, setLlmConfig] = useState(getLLMConfig());
+    const [llmConfig, setLlmConfig] = useState({
+        apiKey: '',
+        model: 'deepseek-chat',
+        temperature: 0.7,
+        maxTokens: 2000
+    });
     const [showApiKey, setShowApiKey] = useState(false);
+    const [isLoadingLLMConfig, setIsLoadingLLMConfig] = useState(true);
+
+    // Load LLM Config from system on mount
+    useEffect(() => {
+        const loadLLMConfig = async () => {
+            setIsLoadingLLMConfig(true);
+            try {
+                const apiKey = await api.getSystemConfig('llm_api_key');
+                const model = await api.getSystemConfig('llm_model');
+                const temperature = await api.getSystemConfig('llm_temperature');
+                const maxTokens = await api.getSystemConfig('llm_max_tokens');
+                
+                setLlmConfig({
+                    apiKey: apiKey || '',
+                    model: model || 'deepseek-chat',
+                    temperature: temperature ? parseFloat(temperature) : 0.7,
+                    maxTokens: maxTokens ? parseInt(maxTokens) : 2000
+                });
+            } catch (error) {
+                console.error('Failed to load LLM config:', error);
+            } finally {
+                setIsLoadingLLMConfig(false);
+            }
+        };
+        
+        if (activeTab === 'SETTINGS') {
+            loadLLMConfig();
+        }
+    }, [activeTab]);
 
     // Platform Switches (Mock)
     const [platformSettings, setPlatformSettings] = useState({
@@ -133,9 +168,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         onShowToast('首页公告已更新');
     };
 
-    const handleSaveLLM = () => {
-        localStorage.setItem('cityinfo_llm_config', JSON.stringify(llmConfig));
-        onShowToast('AI 模型参数配置已保存');
+    const handleSaveLLM = async () => {
+        try {
+            // Save to system config (shared across all users)
+            await api.saveSystemConfig('llm_api_key', llmConfig.apiKey);
+            await api.saveSystemConfig('llm_model', llmConfig.model);
+            await api.saveSystemConfig('llm_temperature', llmConfig.temperature.toString());
+            await api.saveSystemConfig('llm_max_tokens', llmConfig.maxTokens.toString());
+            
+            // Also save to localStorage as cache for faster loading
+            localStorage.setItem('cityinfo_llm_config', JSON.stringify(llmConfig));
+            
+            // Trigger storage event for other tabs/components
+            window.dispatchEvent(new Event('storage'));
+            
+            onShowToast('AI 模型参数配置已保存（全局生效）');
+        } catch (error: any) {
+            console.error('Failed to save LLM config:', error);
+            onShowToast(`保存失败：${error.message || '请稍后重试'}`, 'info');
+        }
     };
 
     const handleSwitchChange = (key: keyof typeof platformSettings) => {
@@ -146,21 +197,97 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const file = e.target.files?.[0];
         if (!file) return;
         
+        // Check admin permission first
+        if (!user?.isAdmin) {
+            onShowToast('权限不足：只有管理员可以上传充值二维码', 'info');
+            // Reset file input
+            if (fileInputRef.current) {
+                fileInputRef.current.value = '';
+            }
+            return;
+        }
+        
+        // Validate file before upload
+        const validation = validateFile(file);
+        if (!validation.valid) {
+            onShowToast(validation.error || '文件验证失败', 'info');
+            // Reset file input
+            if (fileInputRef.current) {
+                fileInputRef.current.value = '';
+            }
+            return;
+        }
+        
+        // Validate file content (check magic bytes)
+        const contentValidation = await validateFileContent(file);
+        if (!contentValidation.valid) {
+            onShowToast(contentValidation.error || '文件内容验证失败', 'info');
+            // Reset file input
+            if (fileInputRef.current) {
+                fileInputRef.current.value = '';
+            }
+            return;
+        }
+        
+        // Check image dimensions (warn if > 2000x2000 but allow upload)
+        const img = new Image();
+        const objectUrl = URL.createObjectURL(file);
+        img.onload = async () => {
+            URL.revokeObjectURL(objectUrl);
+            if (img.width > 2000 || img.height > 2000) {
+                const proceed = confirm(`图片尺寸较大 (${img.width}x${img.height})，建议使用小于 2000x2000 的图片以获得更好的加载速度。\n\n是否继续上传？`);
+                if (!proceed) {
+                    if (fileInputRef.current) {
+                        fileInputRef.current.value = '';
+                    }
+                    return;
+                }
+            }
+            
+            // Proceed with upload
+            await performUpload(file);
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            onShowToast('无法读取图片文件', 'info');
+            if (fileInputRef.current) {
+                fileInputRef.current.value = '';
+            }
+        };
+        img.src = objectUrl;
+    };
+    
+    const performUpload = async (file: File) => {
+        const previousUrl = rechargeQrUrl; // Save for rollback
         setIsUploadingQr(true);
+        
         try {
             const url = await api.uploadImage(file);
             setRechargeQrUrl(url);
             await api.saveSystemConfig('recharge_qr', url);
             onShowToast('充值二维码更新成功');
         } catch (error: any) {
-            console.error(error);
-            if (error.message?.includes('violates row-level security')) {
-                alert('【上传失败】Supabase 权限不足。\n请到 Supabase Dashboard -> Storage -> pic -> Configuration -> Policies，开启 Public Insert 权限。');
+            console.error('QR upload failed:', error);
+            
+            // Rollback UI state on failure
+            setRechargeQrUrl(previousUrl);
+            
+            // Provide specific error messages
+            if (error.message?.includes('violates row-level security') || error.message?.includes('权限')) {
+                onShowToast('上传失败：权限不足。请联系管理员配置 Storage 权限。', 'info');
+            } else if (error.message?.includes('network') || error.message?.includes('网络')) {
+                onShowToast('上传失败：网络连接错误，请检查网络后重试', 'info');
+            } else if (error.message?.includes('文件格式') || error.message?.includes('文件过大')) {
+                onShowToast(`上传失败：${error.message}`, 'info');
             } else {
-                alert(`上传失败: ${error.message}`);
+                onShowToast(`上传失败：${error.message || '未知错误'}`, 'info');
             }
         } finally {
             setIsUploadingQr(false);
+            // Reset file input
+            if (fileInputRef.current) {
+                fileInputRef.current.value = '';
+            }
         }
     };
 
@@ -808,29 +935,87 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </div>
 
                         {/* 3. Recharge QR Setting */}
+                        {/* 3. Recharge QR Code Settings */}
                         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
                              <div className="bg-gray-50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
                                 <h3 className="font-bold text-gray-800 text-sm"><i className="fa-solid fa-qrcode mr-2 text-blue-500"></i>充值收款码设置</h3>
                             </div>
-                            <div className="p-4 flex gap-4 items-center">
-                                <div className="w-24 h-24 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 border border-gray-200 overflow-hidden relative">
-                                    {rechargeQrUrl ? (
-                                        <img src={rechargeQrUrl} alt="QR" className="w-full h-full object-cover" />
-                                    ) : (
-                                        <span className="text-xs">未设置</span>
-                                    )}
-                                    {isUploadingQr && <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-white"><i className="fa-solid fa-spinner fa-spin"></i></div>}
-                                </div>
-                                <div className="flex-1">
-                                    <p className="text-xs text-gray-500 mb-2">上传您的微信/支付宝收款码，用户充值时将显示此图片。</p>
-                                    <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleQrUpload} />
-                                    <button 
-                                        onClick={() => fileInputRef.current?.click()}
-                                        disabled={isUploadingQr}
-                                        className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow hover:bg-blue-700 active:scale-95 transition-all"
-                                    >
-                                        {rechargeQrUrl ? '更换二维码' : '上传二维码'}
-                                    </button>
+                            <div className="p-4">
+                                <div className="flex gap-4 items-start">
+                                    {/* QR Code Preview */}
+                                    <div className="flex-shrink-0">
+                                        <div className="w-32 h-32 bg-gray-100 rounded-lg flex items-center justify-center text-gray-400 border-2 border-gray-200 overflow-hidden relative group">
+                                            {rechargeQrUrl ? (
+                                                <>
+                                                    <img 
+                                                        src={rechargeQrUrl} 
+                                                        alt="收款二维码" 
+                                                        className="w-full h-full object-cover"
+                                                        onError={(e) => {
+                                                            e.currentTarget.src = 'https://dummyimage.com/300x300/eee/aaa&text=QR+Error';
+                                                        }}
+                                                    />
+                                                    {/* Hover overlay */}
+                                                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                                        <span className="text-white text-xs">点击预览</span>
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <div className="text-center p-2">
+                                                    <i className="fa-solid fa-qrcode text-3xl mb-1"></i>
+                                                    <p className="text-xs">未设置</p>
+                                                </div>
+                                            )}
+                                            {isUploadingQr && (
+                                                <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-white">
+                                                    <i className="fa-solid fa-spinner fa-spin text-2xl mb-2"></i>
+                                                    <span className="text-xs">上传中...</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                        {rechargeQrUrl && (
+                                            <p className="text-xs text-green-600 mt-2 text-center">
+                                                <i className="fa-solid fa-check-circle mr-1"></i>已配置
+                                            </p>
+                                        )}
+                                    </div>
+                                    
+                                    {/* Upload Controls */}
+                                    <div className="flex-1">
+                                        <p className="text-sm text-gray-700 mb-2 font-medium">收款码说明</p>
+                                        <p className="text-xs text-gray-500 mb-3 leading-relaxed">
+                                            上传您的微信/支付宝收款码，用户充值时将显示此图片。<br/>
+                                            支持格式：JPG、PNG、GIF、WebP<br/>
+                                            文件大小：不超过 5MB<br/>
+                                            建议尺寸：500x500 至 2000x2000 像素
+                                        </p>
+                                        <input 
+                                            type="file" 
+                                            ref={fileInputRef} 
+                                            className="hidden" 
+                                            accept="image/jpeg,image/png,image/gif,image/webp" 
+                                            onChange={handleQrUpload} 
+                                        />
+                                        <div className="flex gap-2">
+                                            <button 
+                                                onClick={() => fileInputRef.current?.click()}
+                                                disabled={isUploadingQr}
+                                                className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-medium shadow transition-all ${isUploadingQr ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-95'}`}
+                                            >
+                                                <i className={`fa-solid ${isUploadingQr ? 'fa-spinner fa-spin' : rechargeQrUrl ? 'fa-rotate' : 'fa-upload'} mr-2`}></i>
+                                                {isUploadingQr ? '上传中...' : rechargeQrUrl ? '更换二维码' : '上传二维码'}
+                                            </button>
+                                            {rechargeQrUrl && !isUploadingQr && (
+                                                <button 
+                                                    onClick={() => window.open(rechargeQrUrl, '_blank')}
+                                                    className="px-4 py-2.5 rounded-lg text-sm font-medium border-2 border-blue-600 text-blue-600 hover:bg-blue-50 transition-colors"
+                                                >
+                                                    <i className="fa-solid fa-external-link mr-1"></i>
+                                                    查看大图
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -864,11 +1049,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         {/* 2. LLM Config */}
                         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
                             <h3 className="font-bold text-gray-800 mb-3 text-sm flex items-center justify-between">
-                                <span><i className="fa-solid fa-robot text-purple-500 mr-2"></i>AI 模型参数 (DeepSeek)</span>
-                                <span className="text-[10px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded">Running</span>
+                                <span><i className="fa-solid fa-robot text-purple-500 mr-2"></i>AI 模型参数 (DeepSeek) - 全局配置</span>
+                                <span className="text-[10px] bg-green-100 text-green-600 px-1.5 py-0.5 rounded">
+                                    {isLoadingLLMConfig ? '加载中...' : '已就绪'}
+                                </span>
                             </h3>
                             
+                            {isLoadingLLMConfig ? (
+                                <div className="flex items-center justify-center py-8">
+                                    <i className="fa-solid fa-spinner fa-spin text-2xl text-gray-400"></i>
+                                </div>
+                            ) : (
                             <div className="space-y-3">
+                                <div className="bg-blue-50 border border-blue-100 rounded-lg p-2 mb-3">
+                                    <p className="text-xs text-blue-700">
+                                        <i className="fa-solid fa-info-circle mr-1"></i>
+                                        配置后所有用户都可使用AI功能，无需单独配置
+                                    </p>
+                                </div>
+                                
                                 <div>
                                     <label className="block text-xs font-medium text-gray-500 mb-1">API Key</label>
                                     <div className="flex gap-2">
@@ -931,9 +1130,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     onClick={handleSaveLLM}
                                     className="w-full py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 transition-colors shadow-sm mt-2"
                                 >
-                                    保存配置
+                                    保存配置（全局生效）
                                 </button>
                             </div>
+                            )}
                         </div>
 
                         {/* 3. Platform Switches */}

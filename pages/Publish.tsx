@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { CategoryType, Post, PostAttribute, SysCategory } from '../types';
 import { generateDescription } from '../services/deepseek';
 import { api } from '../services/supabase';
@@ -14,6 +14,18 @@ const Publish: React.FC<PublishProps> = ({ onBack, onPublish, categoryConfig }) 
     const [step, setStep] = useState<1 | 2>(1);
     const [selectedCategory, setSelectedCategory] = useState<CategoryType | null>(null);
     const [isGenerating, setIsGenerating] = useState(false);
+    
+    // Debug logging for mobile
+    useEffect(() => {
+        console.log('[Publish] Component mounted');
+        console.log('[Publish] categoryConfig:', categoryConfig);
+        console.log('[Publish] categoryConfig keys:', Object.keys(categoryConfig));
+    }, []);
+
+    useEffect(() => {
+        console.log('[Publish] step changed to:', step);
+        console.log('[Publish] selectedCategory:', selectedCategory);
+    }, [step, selectedCategory]);
     
     // Form State
     const [title, setTitle] = useState('');
@@ -206,28 +218,88 @@ const Publish: React.FC<PublishProps> = ({ onBack, onPublish, categoryConfig }) 
     };
 
     if (step === 1) {
-        return (
-            <div className="bg-white min-h-screen">
-                <div className="p-4 flex items-center border-b border-gray-100">
-                    <button onClick={onBack}><i className="fa-solid fa-xmark text-xl text-gray-500"></i></button>
-                    <span className="ml-4 font-bold text-lg">选择分类</span>
-                </div>
-                {/* Updated to grid-cols-3 for better visual on step 1 */}
-                <div className="grid grid-cols-3 gap-3 p-4">
-                    {/* Sort based on sort_order if available */}
-                    {(Object.values(categoryConfig) as SysCategory[]).sort((a,b) => (a.sort_order || 0) - (b.sort_order || 0)).map((cat) => (
+        // Add error boundary for step 1
+        try {
+            const categoryList = Object.values(categoryConfig) as SysCategory[];
+            console.log('[Publish] Step 1 - categoryList length:', categoryList.length);
+            
+            if (categoryList.length === 0) {
+                return (
+                    <div className="bg-white min-h-screen flex flex-col items-center justify-center p-4">
+                        <i className="fa-solid fa-exclamation-triangle text-4xl text-yellow-500 mb-4"></i>
+                        <p className="text-gray-600 mb-4">分类数据加载失败</p>
                         <button 
-                            key={cat.key}
-                            onClick={() => { setSelectedCategory(cat.key as CategoryType); setStep(2); }}
-                            className="flex flex-col items-center justify-center p-4 border rounded-xl hover:bg-gray-50 active:scale-95 transition-all"
+                            onClick={onBack}
+                            className="px-6 py-2 bg-primary text-white rounded-lg"
                         >
-                             <div className={`w-12 h-12 rounded-full flex items-center justify-center mb-2 ${cat.color}`}>
-                                <i className={`fa-solid ${cat.icon} text-xl`}></i>
-                            </div>
-                            <span className="font-semibold text-gray-700 text-xs">{cat.label}</span>
+                            返回首页
                         </button>
-                    ))}
+                    </div>
+                );
+            }
+
+            return (
+                <div className="bg-white min-h-screen">
+                    <div className="p-4 flex items-center border-b border-gray-100">
+                        <button onClick={onBack}><i className="fa-solid fa-xmark text-xl text-gray-500"></i></button>
+                        <span className="ml-4 font-bold text-lg">选择分类</span>
+                    </div>
+                    {/* Updated to grid-cols-3 for better visual on step 1 */}
+                    <div className="grid grid-cols-3 gap-3 p-4">
+                        {/* Sort based on sort_order if available */}
+                        {categoryList
+                            .filter(cat => cat && cat.key && cat.label) // Filter out invalid entries
+                            .sort((a,b) => (a.sort_order || 0) - (b.sort_order || 0))
+                            .map((cat) => (
+                            <button 
+                                key={cat.key}
+                                onClick={() => { 
+                                    console.log('[Publish] Category selected:', cat.key);
+                                    setSelectedCategory(cat.key as CategoryType); 
+                                    setStep(2); 
+                                }}
+                                className="flex flex-col items-center justify-center p-4 border rounded-xl hover:bg-gray-50 active:scale-95 transition-all"
+                            >
+                                 <div className={`w-12 h-12 rounded-full flex items-center justify-center mb-2 ${cat.color}`}>
+                                    <i className={`fa-solid ${cat.icon} text-xl`}></i>
+                                </div>
+                                <span className="font-semibold text-gray-700 text-xs">{cat.label}</span>
+                            </button>
+                        ))}
+                    </div>
                 </div>
+            );
+        } catch (error) {
+            console.error('[Publish] Error in step 1:', error);
+            return (
+                <div className="bg-white min-h-screen flex flex-col items-center justify-center p-4">
+                    <i className="fa-solid fa-exclamation-triangle text-4xl text-red-500 mb-4"></i>
+                    <p className="text-gray-600 mb-2">页面加载出错</p>
+                    <p className="text-xs text-gray-400 mb-4">{String(error)}</p>
+                    <button 
+                        onClick={onBack}
+                        className="px-6 py-2 bg-primary text-white rounded-lg"
+                    >
+                        返回首页
+                    </button>
+                </div>
+            );
+        }
+    }
+
+    // Safety check: if selectedCategory is not in config, go back to step 1
+    const currentCategory = selectedCategory ? categoryConfig[selectedCategory] : null;
+    if (!currentCategory) {
+        return (
+            <div className="bg-white min-h-screen flex flex-col items-center justify-center p-4">
+                <i className="fa-solid fa-exclamation-triangle text-4xl text-yellow-500 mb-4"></i>
+                <p className="text-gray-600 mb-4">分类配置加载失败</p>
+                <button 
+                    onClick={() => setStep(1)}
+                    className="px-6 py-2 bg-primary text-white rounded-lg"
+                >
+                    返回选择分类
+                </button>
             </div>
         );
     }
@@ -245,7 +317,7 @@ const Publish: React.FC<PublishProps> = ({ onBack, onPublish, categoryConfig }) 
 
             <div className="p-4 flex items-center justify-between border-b border-gray-100">
                 <button onClick={() => setStep(1)}><i className="fa-solid fa-arrow-left text-gray-500"></i></button>
-                <span className="font-bold text-lg">发布{categoryConfig[selectedCategory!].label}信息</span>
+                <span className="font-bold text-lg">发布{currentCategory.label}信息</span>
                 <button onClick={handlePublish} className="text-primary font-bold text-sm">发布</button>
             </div>
 

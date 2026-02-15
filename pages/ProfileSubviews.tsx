@@ -130,12 +130,26 @@ export const Wallet: React.FC<SubViewProps> = ({ onBack }) => {
     const [rechargeAmount, setRechargeAmount] = useState('');
     const [rechargeStep, setRechargeStep] = useState<'INPUT' | 'CONFIRM'>('INPUT');
     const [rechargeQr, setRechargeQr] = useState('');
+    const [isLoadingQr, setIsLoadingQr] = useState(false);
+    const [showQrModal, setShowQrModal] = useState(false);
     const FALLBACK_QR = 'https://dummyimage.com/300x300/eee/aaa&text=QR+Code';
 
     useEffect(() => {
         const loadQr = async () => {
-            const url = await api.getSystemConfig('recharge_qr');
-            if (url) setRechargeQr(url);
+            setIsLoadingQr(true);
+            try {
+                const url = await api.getSystemConfig('recharge_qr');
+                if (url) {
+                    setRechargeQr(url);
+                } else {
+                    console.log('No QR code configured, using fallback');
+                }
+            } catch (error) {
+                console.error('Failed to load QR code:', error);
+                // Silent failure - will use fallback QR
+            } finally {
+                setIsLoadingQr(false);
+            }
         };
         loadQr();
     }, []);
@@ -204,18 +218,78 @@ export const Wallet: React.FC<SubViewProps> = ({ onBack }) => {
                         <div className="flex flex-col items-center animate-in fade-in slide-in-from-right duration-300">
                             <p className="text-gray-500 text-sm mb-4">请扫描下方二维码支付 <span className="font-bold text-gray-900">¥{parseFloat(rechargeAmount).toFixed(2)}</span></p>
                             
-                            <div className="bg-white p-2 border border-gray-200 rounded-lg shadow-sm mb-4">
-                                <img 
-                                    src={rechargeQr || FALLBACK_QR} 
-                                    alt="QR" 
-                                    className="w-48 h-48 object-contain"
-                                    onError={(e) => {
-                                        // Fallback to default QR if image load fails
-                                        e.currentTarget.src = FALLBACK_QR;
-                                        e.currentTarget.onerror = null; // Prevent infinite loop
-                                    }}
-                                />
+                            {/* QR Code Display with Loading State */}
+                            <div 
+                                className="bg-white p-2 border border-gray-200 rounded-lg shadow-sm mb-4 relative cursor-pointer hover:shadow-md transition-shadow"
+                                onClick={() => !isLoadingQr && setShowQrModal(true)}
+                            >
+                                {isLoadingQr ? (
+                                    // Loading skeleton
+                                    <div className="w-48 h-48 flex flex-col items-center justify-center bg-gray-100 animate-pulse">
+                                        <i className="fa-solid fa-spinner fa-spin text-3xl text-gray-400 mb-2"></i>
+                                        <span className="text-xs text-gray-500">加载中...</span>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <img 
+                                            src={rechargeQr || FALLBACK_QR} 
+                                            alt="收款二维码" 
+                                            className="w-48 h-48 object-contain"
+                                            onError={(e) => {
+                                                console.warn('QR image failed to load, using fallback');
+                                                // Fallback to default QR if image load fails
+                                                e.currentTarget.src = FALLBACK_QR;
+                                                e.currentTarget.onerror = null; // Prevent infinite loop
+                                            }}
+                                        />
+                                        {/* Click hint overlay */}
+                                        <div className="absolute inset-0 bg-black/0 hover:bg-black/10 transition-colors flex items-center justify-center">
+                                            <span className="opacity-0 hover:opacity-100 text-white text-xs bg-black/70 px-2 py-1 rounded">
+                                                点击放大
+                                            </span>
+                                        </div>
+                                    </>
+                                )}
                             </div>
+                            
+                            {/* QR Code Modal */}
+                            {showQrModal && (
+                                <div 
+                                    className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200"
+                                    onClick={() => setShowQrModal(false)}
+                                >
+                                    <div className="relative max-w-md w-full">
+                                        <button 
+                                            onClick={() => setShowQrModal(false)}
+                                            className="absolute -top-12 right-0 w-10 h-10 rounded-full bg-white/20 text-white flex items-center justify-center hover:bg-white/30 transition-colors"
+                                        >
+                                            <i className="fa-solid fa-xmark text-xl"></i>
+                                        </button>
+                                        <div className="bg-white p-4 rounded-2xl shadow-2xl">
+                                            <img 
+                                                src={rechargeQr || FALLBACK_QR} 
+                                                alt="收款二维码" 
+                                                className="w-full h-auto object-contain"
+                                                onClick={(e) => e.stopPropagation()}
+                                                onError={(e) => {
+                                                    e.currentTarget.src = FALLBACK_QR;
+                                                    e.currentTarget.onerror = null;
+                                                }}
+                                            />
+                                            <p className="text-center text-sm text-gray-600 mt-3">
+                                                长按图片保存二维码
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {!rechargeQr && !isLoadingQr && (
+                                <p className="text-xs text-orange-500 mb-2">
+                                    <i className="fa-solid fa-exclamation-triangle mr-1"></i>
+                                    管理员尚未配置收款码
+                                </p>
+                            )}
                             
                             <p className="text-xs text-gray-400 mb-6 flex items-center gap-2">
                                 <i className="fa-brands fa-weixin text-green-500"></i>

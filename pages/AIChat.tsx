@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChatMessage } from '../types';
-import { callDeepSeek } from '../services/deepseek';
+import { callDeepSeek, getLLMConfig } from '../services/deepseek';
 
 interface AIChatProps {
     onBack: () => void;
@@ -12,7 +12,28 @@ const AIChat: React.FC<AIChatProps> = ({ onBack }) => {
     ]);
     const [inputValue, setInputValue] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [hasApiKey, setHasApiKey] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
+
+    // Check API Key on mount and periodically
+    useEffect(() => {
+        const checkApiKey = async () => {
+            try {
+                const config = await getLLMConfig();
+                setHasApiKey(!!config.apiKey);
+            } catch (error) {
+                console.error('Failed to check API key:', error);
+                setHasApiKey(false);
+            }
+        };
+        
+        checkApiKey();
+        
+        // Check every 2 seconds in case admin configures it
+        const interval = setInterval(checkApiKey, 2000);
+        
+        return () => clearInterval(interval);
+    }, []);
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -22,6 +43,31 @@ const AIChat: React.FC<AIChatProps> = ({ onBack }) => {
 
     const handleSend = async () => {
         if (!inputValue.trim() || isLoading) return;
+
+        // Check API Key before sending
+        try {
+            const config = await getLLMConfig();
+            if (!config.apiKey) {
+                const errorMsg: ChatMessage = {
+                    id: Date.now().toString(),
+                    role: 'assistant',
+                    content: '请先在【管理员控制台 -> 系统设置】中配置 DeepSeek API Key。',
+                    timestamp: Date.now()
+                };
+                setMessages(prev => [...prev, errorMsg]);
+                return;
+            }
+        } catch (error) {
+            console.error('Failed to check API key:', error);
+            const errorMsg: ChatMessage = {
+                id: Date.now().toString(),
+                role: 'assistant',
+                content: '无法获取配置信息，请稍后再试。',
+                timestamp: Date.now()
+            };
+            setMessages(prev => [...prev, errorMsg]);
+            return;
+        }
 
         const userMsg: ChatMessage = {
             id: Date.now().toString(),
@@ -71,8 +117,10 @@ const AIChat: React.FC<AIChatProps> = ({ onBack }) => {
                 <div className="flex-1">
                     <h1 className="font-bold text-gray-900">智能助手</h1>
                     <div className="flex items-center gap-1">
-                        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                        <span className="text-xs text-gray-400">DeepSeek Online</span>
+                        <span className={`w-2 h-2 rounded-full ${hasApiKey ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+                        <span className="text-xs text-gray-400">
+                            {hasApiKey ? 'DeepSeek Online' : '未配置 API Key'}
+                        </span>
                     </div>
                 </div>
             </div>

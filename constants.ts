@@ -197,15 +197,15 @@ export const MOCK_CHATS: ChatSession[] = [
     }
 ];
 
-export const CATEGORY_CONFIG: Record<CategoryType, { label: string, icon: string, color: string }> = {
-    [CategoryType.HOUSING]: { label: '房屋租赁', icon: 'fa-home', color: 'bg-blue-100 text-blue-600' },
-    [CategoryType.JOBS]: { label: '求职招聘', icon: 'fa-briefcase', color: 'bg-orange-100 text-orange-600' },
-    [CategoryType.SECOND_HAND]: { label: '二手闲置', icon: 'fa-tag', color: 'bg-green-100 text-green-600' },
-    [CategoryType.SERVICES]: { label: '生活服务', icon: 'fa-tools', color: 'bg-purple-100 text-purple-600' },
-    [CategoryType.CARPOOL]: { label: '顺风车', icon: 'fa-car', color: 'bg-indigo-100 text-indigo-600' },
-    [CategoryType.PETS]: { label: '宠物生活', icon: 'fa-paw', color: 'bg-pink-100 text-pink-600' },
-    [CategoryType.DATING]: { label: '同城交友', icon: 'fa-heart', color: 'bg-red-100 text-red-600' },
-    [CategoryType.BUSINESS]: { label: '生意转让', icon: 'fa-shop-lock', color: 'bg-yellow-100 text-yellow-600' },
-    [CategoryType.EDUCATION]: { label: '教育培训', icon: 'fa-graduation-cap', color: 'bg-teal-100 text-teal-600' },
-    [CategoryType.AGRICULTURE]: { label: '农林牧渔', icon: 'fa-wheat-awn', color: 'bg-lime-100 text-lime-600' }
+export const CATEGORY_CONFIG: Record<CategoryType, SysCategory> = {
+    [CategoryType.HOUSING]: { key: 'HOUSING', label: '房屋租赁', icon: 'fa-home', color: 'bg-blue-100 text-blue-600', sort_order: 1 },
+    [CategoryType.JOBS]: { key: 'JOBS', label: '求职招聘', icon: 'fa-briefcase', color: 'bg-orange-100 text-orange-600', sort_order: 2 },
+    [CategoryType.SECOND_HAND]: { key: 'SECOND_HAND', label: '二手闲置', icon: 'fa-tag', color: 'bg-green-100 text-green-600', sort_order: 3 },
+    [CategoryType.SERVICES]: { key: 'SERVICES', label: '生活服务', icon: 'fa-tools', color: 'bg-purple-100 text-purple-600', sort_order: 4 },
+    [CategoryType.CARPOOL]: { key: 'CARPOOL', label: '顺风车', icon: 'fa-car', color: 'bg-indigo-100 text-indigo-600', sort_order: 5 },
+    [CategoryType.PETS]: { key: 'PETS', label: '宠物生活', icon: 'fa-paw', color: 'bg-pink-100 text-pink-600', sort_order: 6 },
+    [CategoryType.DATING]: { key: 'DATING', label: '同城交友', icon: 'fa-heart', color: 'bg-red-100 text-red-600', sort_order: 7 },
+    [CategoryType.BUSINESS]: { key: 'BUSINESS', label: '生意转让', icon: 'fa-shop-lock', color: 'bg-yellow-100 text-yellow-600', sort_order: 8 },
+    [CategoryType.EDUCATION]: { key: 'EDUCATION', label: '教育培训', icon: 'fa-graduation-cap', color: 'bg-teal-100 text-teal-600', sort_order: 9 },
+    [CategoryType.AGRICULTURE]: { key: 'AGRICULTURE', label: '农林牧渔', icon: 'fa-wheat-awn', color: 'bg-lime-100 text-lime-600', sort_order: 10 }
 };

@@ -29,7 +29,7 @@ const App: React.FC = () => {
     const [posts, setPosts] = useState<Post[]>(MOCK_POSTS);
     
     // Dynamic System Config
-    const [categories, setCategories] = useState<Record<string, SysCategory>>(CATEGORY_CONFIG as any);
+    const [categories, setCategories] = useState<Record<string, SysCategory>>(CATEGORY_CONFIG);
     const [banners, setBanners] = useState<BannerAd[]>(MOCK_BANNERS);
     const [merchants, setMerchants] = useState<Record<string, Merchant>>(MOCK_MERCHANTS);
     const [services, setServices] = useState<ServiceItem[]>(MOCK_SERVICES);
@@ -559,6 +559,7 @@ const App: React.FC = () => {
             case 'ADMIN_DASHBOARD':
                 return user?.isAdmin ? (
                     <AdminDashboard 
+                        user={user}
                         supportChats={supportChats}
                         onReply={handleAdminReply}
                         onBack={() => setCurrentView('PROFILE')}

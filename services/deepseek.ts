@@ -20,8 +20,32 @@ interface DeepSeekMessage {
     content: string;
 }
 
-// Helper to get current config
-export const getLLMConfig = () => {
+// Helper to get current config from system (server-side storage)
+export const getLLMConfig = async () => {
+    try {
+        // Import api dynamically to avoid circular dependency
+        const { api } = await import('./supabase');
+        
+        // Try to get from system config first (shared across all users)
+        const apiKey = await api.getSystemConfig('llm_api_key');
+        const model = await api.getSystemConfig('llm_model');
+        const temperature = await api.getSystemConfig('llm_temperature');
+        const maxTokens = await api.getSystemConfig('llm_max_tokens');
+        
+        return {
+            apiKey: apiKey || DEFAULT_CONFIG.apiKey,
+            model: model || DEFAULT_CONFIG.model,
+            temperature: temperature ? parseFloat(temperature) : DEFAULT_CONFIG.temperature,
+            maxTokens: maxTokens ? parseInt(maxTokens) : DEFAULT_CONFIG.maxTokens
+        };
+    } catch (e) {
+        console.error('Failed to load LLM config:', e);
+        return DEFAULT_CONFIG;
+    }
+};
+
+// Synchronous version for backward compatibility (tries localStorage as fallback)
+export const getLLMConfigSync = () => {
     try {
         const saved = localStorage.getItem('cityinfo_llm_config');
         return saved ? { ...DEFAULT_CONFIG, ...JSON.parse(saved) } : DEFAULT_CONFIG;
@@ -31,7 +55,7 @@ export const getLLMConfig = () => {
 };
 
 export const callDeepSeek = async (messages: DeepSeekMessage[], systemPrompt?: string): Promise<string> => {
-    const config = getLLMConfig();
+    const config = await getLLMConfig();
 
     if (!config.apiKey) {
         return '请先在【管理员控制台 -> 系统设置】中配置 DeepSeek API Key。';
