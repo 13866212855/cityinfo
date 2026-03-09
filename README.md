@@ -1,4 +1,4 @@
-# CityInfo - 城市脉动
+# CityInfo - 城市脉动3.05
 
 ![Version](https://img.shields.io/badge/version-1.2.0-blue) ![Status](https://img.shields.io/badge/status-active-success) ![Tech](https://img.shields.io/badge/react-19-cyan)
 
